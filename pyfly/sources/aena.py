@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright
 
 from .base import FlightSource, Scope
 from ..enrich import enrich, load_airports, load_airlines
+from ..exceptions import ScraperError
 
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "airport_urls.json"
 DEST_SUFFIX = "/aerolineas-y-destinos/destinos-aeropuerto.html"
@@ -35,7 +36,7 @@ class AENASource(FlightSource):
         raw_rows = asyncio.run(self._scrape_all(airport_urls))
 
         if not raw_rows:
-            raise RuntimeError(
+            raise ScraperError(
                 "AENA scraper returned 0 routes across all airports. "
                 "The page structure may have changed — check CSS selectors "
                 "against archive/aenadestinations.py."

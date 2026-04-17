@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from .base import FlightSource, Scope, AENA_IATA
 from ..enrich import load_airports, load_airlines
+from ..exceptions import AuthError
 
 load_dotenv()
 
@@ -53,6 +54,13 @@ class OpenSkySource(FlightSource):
                 continue
 
             fetched = self._fetch_airport(icao)
+            if fetched is None:
+                # Rate-limited — try to serve stale cache regardless of TTL
+                _, stale = check_cache(icao)
+                if stale is not None and len(stale) > 0:
+                    print(f"  OpenSky 429 for {icao} — serving stale cache")
+                    raw_records.extend(stale.to_dicts())
+                continue
             write_cache(icao, fetched)
             raw_records.extend(fetched)
 
@@ -75,7 +83,7 @@ class OpenSkySource(FlightSource):
         )
         return {row["iata_code"]: row["icao_code"] for row in mapping.iter_rows(named=True)}
 
-    def _fetch_airport(self, icao: str) -> list[dict]:
+    def _fetch_airport(self, icao: str) -> list[dict] | None:
         end_ts = int(time.time())
         begin_ts = end_ts - WINDOW_DAYS * 86400
         username = os.getenv("OPENSKY_USERNAME")
@@ -94,13 +102,13 @@ class OpenSkySource(FlightSource):
                 return []
 
         if resp.status_code == 401:
-            raise RuntimeError(
+            raise AuthError(
                 "OpenSky authentication failed. Check OPENSKY_USERNAME / "
                 "OPENSKY_PASSWORD in .env"
             )
         if resp.status_code == 429:
-            print(f"  OpenSky rate limit hit for {icao} — using stale cache or skipping")
-            return []
+            print(f"  OpenSky rate limit hit for {icao}")
+            return None  # caller will try stale cache
         if not resp.is_success:
             print(f"  OpenSky {resp.status_code} for {icao}, skipping")
             return []

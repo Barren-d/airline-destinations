@@ -13,6 +13,16 @@ def _conn() -> duckdb.DuckDBPyConnection:
 
 
 def init_db() -> None:
+    try:
+        _init_tables()
+    except Exception as exc:
+        print(f"  db: init failed ({exc}), recreating database")
+        if DB_PATH.exists():
+            DB_PATH.unlink()
+        _init_tables()
+
+
+def _init_tables() -> None:
     con = _conn()
     con.execute("""
         CREATE TABLE IF NOT EXISTS routes (

@@ -99,7 +99,7 @@ def enrich(
 
     df = df.with_columns(pl.lit(source).alias("source"))
 
-    # Drop rows missing coordinates — log the count
+    # Drop rows missing coordinates — log the count and warn if > 5%
     before = len(df)
     df = df.filter(
         pl.col("origin_lat").is_not_null()
@@ -107,7 +107,12 @@ def enrich(
     )
     dropped = before - len(df)
     if dropped:
-        print(f"  enrich: dropped {dropped} rows with missing coordinates")
+        pct = dropped / before * 100 if before else 0
+        msg = f"  enrich: dropped {dropped}/{before} rows with missing coordinates ({pct:.1f}%)"
+        if pct > 5:
+            print(f"WARNING: {msg} — airports.csv may need refreshing")
+        else:
+            print(msg)
 
     return df.select([
         "origin_iata", "origin_lat", "origin_lon",
