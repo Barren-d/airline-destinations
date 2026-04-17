@@ -5,7 +5,13 @@ import duckdb
 import polars as pl
 
 DB_PATH = Path(__file__).parent.parent / "data" / "pyfly.ddb"
+DATA_DIR = Path(__file__).parent.parent / "data"
 CACHE_TTL_HOURS = 24
+
+PARQUET_SOURCES = {
+    "aena": DATA_DIR / "routes_aena.parquet",
+    "openflights_2017": DATA_DIR / "routes_openflights.parquet",
+}
 
 
 def _conn() -> duckdb.DuckDBPyConnection:
@@ -15,11 +21,13 @@ def _conn() -> duckdb.DuckDBPyConnection:
 def init_db() -> None:
     try:
         _init_tables()
+        _hydrate_from_parquet()
     except Exception as exc:
         print(f"  db: init failed ({exc}), recreating database")
         if DB_PATH.exists():
             DB_PATH.unlink()
         _init_tables()
+        _hydrate_from_parquet()
 
 
 def _init_tables() -> None:
@@ -42,25 +50,58 @@ def _init_tables() -> None:
     con.close()
 
 
-def write_routes(df: pl.DataFrame, source: str) -> None:
+def _hydrate_from_parquet() -> None:
+    """On cold start (empty routes table), load any committed parquet snapshots."""
     con = _conn()
-    con.execute("DELETE FROM routes WHERE source = ?", [source])
-    con.execute("INSERT INTO routes SELECT *, NOW() FROM df")
+    count = con.execute("SELECT COUNT(*) FROM routes").fetchone()[0]
+    if count > 0:
+        con.close()
+        return
+
+    for source, path in PARQUET_SOURCES.items():
+        if path.exists():
+            con.execute(f"""
+                INSERT INTO routes
+                SELECT *, NOW() AS scraped_at FROM read_parquet('{path.as_posix()}')
+            """)
+            loaded = con.execute(
+                "SELECT COUNT(*) FROM routes WHERE source = ?", [source]
+            ).fetchone()[0]
+            print(f"  db: hydrated {loaded} rows from {path.name}")
+
     con.close()
 
 
-def read_routes(source: str | None = None, scope=None) -> pl.DataFrame:
+def write_routes(df: pl.DataFrame, source: str) -> None:
     con = _conn()
-    query = "SELECT * FROM routes"
+    con.execute("DELETE FROM routes WHERE source = ?", [source])
+    # Register the polars df as a DuckDB view so we can INSERT from it
+    con.register("_incoming", df.to_arrow())
+    con.execute("INSERT INTO routes SELECT *, NOW() FROM _incoming")
+    con.unregister("_incoming")
+    con.close()
+
+    # Export parquet snapshot after every successful write
+    parquet_path = PARQUET_SOURCES.get(source)
+    if parquet_path:
+        df.write_parquet(parquet_path)
+        print(f"  db: wrote {len(df)} rows to {parquet_path.name}")
+
+
+def read_routes(source: str | None = None) -> pl.DataFrame:
+    con = _conn()
     if source:
-        query += f" WHERE source = '{source}'"
-    result = con.execute(query).pl()
+        result = con.execute(
+            "SELECT * EXCLUDE scraped_at FROM routes WHERE source = ?", [source]
+        ).pl()
+    else:
+        result = con.execute("SELECT * EXCLUDE scraped_at FROM routes").pl()
     con.close()
     return result
 
 
 def get_data_age(source: str) -> float | None:
-    """Return age in hours of the most recent scrape for source, or None."""
+    """Return age in hours of the most recent write for source, or None."""
     con = _conn()
     row = con.execute(
         "SELECT MAX(scraped_at) FROM routes WHERE source = ?", [source]
@@ -79,10 +120,14 @@ def get_data_age(source: str) -> float | None:
 def check_cache(airport_icao: str) -> tuple[bool, pl.DataFrame | None]:
     """Return (hit, df). hit=True if cache exists and is < 24h old."""
     con = _conn()
-    row = con.execute(
-        "SELECT data, fetched_at FROM opensky_cache WHERE airport_icao = ?",
-        [airport_icao],
-    ).fetchone()
+    try:
+        row = con.execute(
+            "SELECT data, fetched_at FROM opensky_cache WHERE airport_icao = ?",
+            [airport_icao],
+        ).fetchone()
+    except Exception:
+        con.close()
+        return False, None
     con.close()
     if not row:
         return False, None
@@ -93,12 +138,15 @@ def check_cache(airport_icao: str) -> tuple[bool, pl.DataFrame | None]:
         fetched_at = fetched_at.replace(tzinfo=timezone.utc)
     age_h = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 3600
     if age_h > CACHE_TTL_HOURS:
-        return False, None
+        return False, _records_to_df(json.loads(data_json))  # return stale for fallback
 
-    records = json.loads(data_json)
+    return True, _records_to_df(json.loads(data_json))
+
+
+def _records_to_df(records: list[dict]) -> pl.DataFrame | None:
     if not records:
-        return True, pl.DataFrame()
-    return True, pl.DataFrame(records)
+        return pl.DataFrame()
+    return pl.DataFrame(records)
 
 
 def write_cache(airport_icao: str, records: list[dict]) -> None:
