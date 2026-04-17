@@ -7,8 +7,14 @@ from pyfly.sources.base import Scope, SCHEMA, AENA_IATA
 
 @pytest.fixture(scope="module")
 def aena_df():
-    source = AENASource()
-    return source.fetch(Scope.AENA)
+    parquet = pl.Path("data/routes_aena.parquet") if hasattr(pl, "Path") else None
+    from pathlib import Path
+    cached = Path("data/routes_aena.parquet")
+    if cached.exists():
+        # Fast path: validate already-scraped data without re-scraping
+        return pl.read_parquet(cached)
+    # Slow path: live scrape (only runs if parquet not present)
+    return AENASource().fetch(Scope.AENA)
 
 
 def test_aena_is_available():
