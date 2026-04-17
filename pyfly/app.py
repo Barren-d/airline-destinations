@@ -224,7 +224,7 @@ st.pydeck_chart(
         layers=[arc_layer],
         initial_view_state=view_state,
         tooltip=tooltip,
-        map_style="mapbox://styles/mapbox/dark-v10",
+        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     ),
     width="stretch",
 )
