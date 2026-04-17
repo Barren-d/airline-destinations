@@ -18,6 +18,19 @@ PAGE_TIMEOUT_MS = 15_000
 ARTICLE_TIMEOUT_MS = 10_000
 
 
+import re as _re
+
+_DATE_ANNOTATION = _re.compile(
+    r"^desde\s*el\b",  # "Desde el 01/04/2026" or typo "Desdel el ..."
+    _re.IGNORECASE,
+)
+
+
+def _is_date_annotation(text: str) -> bool:
+    """Return True for seasonal-start strings like 'Desde el 01/04/2026'."""
+    return bool(_DATE_ANNOTATION.match(text.strip()))
+
+
 def _dest_url(main_url: str) -> str:
     """Derive the destinations page URL from an airport main page URL."""
     return main_url.replace(".html", DEST_SUFFIX)
@@ -155,7 +168,11 @@ class AENASource(FlightSource):
             dest_raw = lines[0]
             dest_country = lines[2] if len(lines) > 2 else ""
             # airlines start after the "Aerolíneas" label at index 3
-            airlines = lines[4:] if len(lines) > 4 else [""]
+            # filter out seasonal date annotations e.g. "Desde el 01/04/2026"
+            airlines = [
+                l for l in (lines[4:] if len(lines) > 4 else [""])
+                if not _is_date_annotation(l)
+            ] or [""]
 
             # one row per airline — allows filtering by carrier in the app
             for airline in airlines:
