@@ -94,7 +94,7 @@ except Exception:
 
 st.markdown("---")
 
-st.page_link("pages/1_Route_Map.py", label="Open the Route Map →", icon="🗺️")
+st.info("👈 Open **Route Map** from the sidebar to explore the network.")
 
 st.markdown(
     "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports</sub>",
