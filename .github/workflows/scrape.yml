@@ -1,0 +1,34 @@
+name: AENA route scrape
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC daily
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Install dependencies (with scraper extras)
+        run: uv sync --extra scraper
+
+      - name: Install Chromium for Playwright
+        run: uv run playwright install chromium --with-deps
+
+      - name: Run AENA scraper
+        run: uv run python -m pyfly --source aena --scope aena
+
+      - name: Commit updated parquet snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/routes_aena.parquet
+          git diff --staged --quiet || git commit -m "data: AENA route snapshot $(date -u +%Y-%m-%d)"
+          git push
