@@ -1,0 +1,9 @@
+.venv/
+data/pyfly.ddb
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+.DS_Store
