@@ -5,8 +5,8 @@ import polars as pl
 import pydeck as pdk
 import streamlit as st
 
-from .db import get_data_age as _db_age, init_db, read_routes
-from .sources.opensky import OpenSkySource
+from pyfly.db import get_data_age as _db_age, init_db, read_routes
+from pyfly.sources.opensky import OpenSkySource
 
 st.set_page_config(
     page_title="PyFly — AENA Route Map",
@@ -219,7 +219,7 @@ st.pydeck_chart(
         tooltip=tooltip,
         map_style="mapbox://styles/mapbox/dark-v10",
     ),
-    use_container_width=True,
+    width="stretch",
 )
 
 st.caption(SOURCE_INFO.get(selected_source, ("", ""))[1])
