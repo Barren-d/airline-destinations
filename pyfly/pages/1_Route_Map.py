@@ -200,10 +200,17 @@ tooltip = {
 st.pydeck_chart(
     pdk.Deck(
         layers=[arc_layer],
-        initial_view_state=pdk.ViewState(latitude=40.4, longitude=-3.7, zoom=4, pitch=30),
+        initial_view_state=pdk.ViewState(
+            latitude=38.5,   # centre lower to balance Canary Islands weight
+            longitude=-5.0,
+            zoom=4.8,
+            pitch=45,        # steeper angle fills vertical space better
+            bearing=-10,     # slight rotation breaks the rectangular feel
+        ),
         tooltip=tooltip,
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     ),
+    height=680,
     width="stretch",
 )
 
