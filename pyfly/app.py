@@ -1,232 +1,102 @@
-"""PyFly — interactive great circle route visualisation. Read-only consumer of DuckDB."""
+"""PyFly — landing page."""
 import sys
 from pathlib import Path
 
-# Ensure the repo root is on sys.path so absolute imports work when Streamlit
-# loads this file as a script rather than as part of an installed package.
 _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import polars as pl
-import pydeck as pdk
 import streamlit as st
 
-from pyfly.db import get_data_age as _db_age, init_db, read_routes
-from pyfly.sources.opensky import OpenSkySource
-
 st.set_page_config(
-    page_title="PyFly — AENA Route Map",
+    page_title="PyFly",
     page_icon="✈",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-DATA_DIR = Path(__file__).parent.parent / "data"
+st.title("✈ PyFly")
+st.subheader("Interactive great circle route visualisation for the AENA Spanish airport network")
 
-SOURCE_INFO = {
-    "aena": ("AENA Live", "Scraped from aena.es — current scheduled routes."),
-    "openflights_2017": ("Historical (2017)", "OpenFlights database circa 2017. Useful for pre-COVID comparison."),
-    "opensky": ("OpenSky", "OpenSky Network — actual flights flown in the last 7 days."),
-}
+st.markdown("""
+PyFly maps every scheduled flight route in Spain's AENA network as a geodesic arc —
+origin to destination, coloured by direction, hoverable for airline detail.
+Built as a revival of a 2022 scraping project, modernised with a pluggable
+multi-source architecture and a live Streamlit interface.
+""")
 
+st.markdown("---")
 
-# ---------------------------------------------------------------------------
-# Cached data helpers
-# ---------------------------------------------------------------------------
+col1, col2, col3 = st.columns(3)
 
-@st.cache_data(ttl=300)
-def load_data(source: str) -> pl.DataFrame:
-    init_db()
-    return read_routes(source=source)
-
-
-@st.cache_data(ttl=300)
-def data_age_hours(source: str) -> float | None:
-    return _db_age(source)
-
-
-@st.cache_data
-def country_lookup() -> dict[str, str]:
-    path = DATA_DIR / "airports.csv"
-    if not path.exists():
-        return {}
-    df = pl.read_csv(path).select(["iata_code", "iso_country"])
-    return {r["iata_code"]: r["iso_country"] for r in df.iter_rows(named=True)}
-
-
-def _age_label(source: str) -> str:
-    age = data_age_hours(source)
-    if age is None:
-        return "no data"
-    if age < 6:
-        return f"✅ {age:.0f}h ago"
-    if age < 24:
-        return f"🟡 {age:.0f}h ago"
-    return f"🔴 {age:.0f}h ago"
-
-
-def _opensky_available() -> bool:
-    try:
-        return OpenSkySource().is_available()
-    except Exception:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
-
-with st.sidebar:
-    st.title("✈ PyFly")
-    st.markdown("---")
-
-    st.subheader("Data source")
-    sky_ok = _opensky_available()
-    source_options = {
-        "AENA Live": "aena",
-        "Historical (2017)": "openflights_2017",
-        f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
-    }
-    source_choice = st.radio("Source", list(source_options.keys()), label_visibility="collapsed")
-    selected_source = source_options[source_choice]
-
-    if selected_source == "opensky" and not sky_ok:
-        st.warning("Set OPENSKY_USERNAME and OPENSKY_PASSWORD in .env to enable OpenSky.")
-
-    st.caption(f"Data age: {_age_label(selected_source)}")
-    if st.button("↻ Refresh", help="Clear cache and re-read from DuckDB"):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.markdown("---")
-
-    # Load data (may be empty on cold start before ingestion)
-    df = load_data(selected_source)
-
-    if df.is_empty():
-        src_cli = selected_source.replace("_2017", "")
-        st.warning("No data for this source. Run:")
-        st.code(f"uv run python -m pyfly --source {src_cli} --scope aena")
-        st.stop()
-
-    # Filters
-    st.subheader("Filters")
-
-    all_origins = ["All"] + sorted(df["origin_iata"].unique().to_list())
-    origin_filter = st.selectbox("Origin airport", all_origins)
-
-    all_airlines = ["All"] + sorted(
-        x for x in df["airline_name"].drop_nulls().unique().to_list() if x
-    )
-    airline_filter = st.selectbox("Airline", all_airlines)
-
-    cmap = country_lookup()
-    dest_countries = sorted({
-        cmap.get(iata, "")
-        for iata in df["dest_iata"].unique().to_list()
-        if cmap.get(iata)
-    })
-    country_filter = st.selectbox("Dest country", ["All"] + dest_countries)
-
-    st.markdown("---")
-    st.subheader("Arc density")
-    max_arcs = st.slider("Max routes", min_value=100, max_value=2000, value=500, step=100)
-
-    st.markdown("---")
-    stats_slot = st.empty()
-
-
-# ---------------------------------------------------------------------------
-# Filtering
-# ---------------------------------------------------------------------------
-
-filtered = df
-
-if origin_filter != "All":
-    filtered = filtered.filter(pl.col("origin_iata") == origin_filter)
-
-if airline_filter != "All":
-    filtered = filtered.filter(pl.col("airline_name") == airline_filter)
-
-if country_filter != "All" and cmap:
-    in_country = {k for k, v in cmap.items() if v == country_filter}
-    filtered = filtered.filter(pl.col("dest_iata").is_in(in_country))
-
-capped = False
-if origin_filter == "All" and len(filtered) > max_arcs:
-    filtered = filtered.head(max_arcs)
-    capped = True
-
-
-# ---------------------------------------------------------------------------
-# Stats
-# ---------------------------------------------------------------------------
-
-with stats_slot:
+with col1:
+    st.markdown("### 🛫 AENA Live")
     st.markdown(
-        f"**Routes:** {len(filtered)}  \n"
-        f"**Destinations:** {filtered['dest_iata'].n_unique()}  \n"
-        f"**Airlines:** {filtered['airline_iata'].n_unique()}"
+        "Current scheduled routes scraped daily from **aena.es** using a headless "
+        "Chromium browser. Covers all 43 commercial airports in the AENA network. "
+        "Refreshed automatically via GitHub Actions."
     )
 
+with col2:
+    st.markdown("### 📅 Historical (2017)")
+    st.markdown(
+        "Pre-COVID baseline from the **OpenFlights** open dataset (~2017 vintage). "
+        "Useful for spotting routes that existed before the pandemic and never "
+        "came back, or new routes that didn't exist then."
+    )
 
-# ---------------------------------------------------------------------------
-# Main area
-# ---------------------------------------------------------------------------
+with col3:
+    st.markdown("### 🔴 OpenSky")
+    st.markdown(
+        "Actual flights flown in the last 7 days from the **OpenSky Network** REST API. "
+        "Requires free API credentials. Results are cached per-airport for 24 hours "
+        "to stay within the free-tier rate limit."
+    )
 
-st.title("AENA Route Network")
+st.markdown("---")
 
-age = data_age_hours(selected_source)
-if age is not None and age > 48:
-    st.error(f"⚠️ Data is {age:.0f}h old — the scraper may need attention.")
-elif age is not None and age > 6:
-    st.warning(f"Data is {age:.0f}h old.")
+st.markdown("### How it works")
 
-if capped:
-    st.info(f"Showing top {max_arcs} routes by order. Adjust with the sidebar slider.")
+st.markdown("""
+**Scraper** (CLI / GitHub Actions cron)
+`python -m pyfly --source aena --scope aena`
+Playwright scrapes the AENA destinations page for each of the 43 airports,
+parses routes and airlines, enriches with coordinates from OurAirports,
+and writes a parquet snapshot committed back to the repo.
 
-if filtered.is_empty():
-    st.warning("No routes match the current filters.")
-    st.stop()
+**App** (Streamlit — this page)
+Reads exclusively from DuckDB, which is hydrated from the committed parquet
+files on cold start. The app never triggers a scrape. Data age is shown
+next to the source selector so you always know how fresh the data is.
 
-arc_data = filtered.select([
-    "origin_iata", "origin_lat", "origin_lon",
-    "dest_iata", "dest_lat", "dest_lon",
-    "airline_name", "source",
-]).to_pandas()
+**Adding a new source**
+One new file implementing `FlightSource`, one line in `ingest.py`. Nothing else changes.
+""")
 
-arc_layer = pdk.Layer(
-    "ArcLayer",
-    data=arc_data,
-    get_source_position=["origin_lon", "origin_lat"],
-    get_target_position=["dest_lon", "dest_lat"],
-    get_source_color=[255, 140, 0, 160],
-    get_target_color=[0, 128, 255, 160],
-    get_width=1.5,
-    pickable=True,
-    auto_highlight=True,
+st.markdown("---")
+
+st.markdown("### Network at a glance")
+
+try:
+    from pyfly.db import init_db, read_routes
+    init_db()
+    df = read_routes(source="aena")
+    if not df.is_empty():
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Airports", df["origin_iata"].n_unique())
+        c2.metric("Routes", len(df))
+        c3.metric("Destinations", df["dest_iata"].n_unique())
+        c4.metric("Airlines", df["airline_iata"].n_unique())
+    else:
+        st.info("No AENA data loaded yet. Run the ingestion pipeline to populate.")
+except Exception:
+    st.info("Run `uv run python -m pyfly --source aena --scope aena` to load data.")
+
+st.markdown("---")
+
+st.page_link("pages/1_Route_Map.py", label="Open the Route Map →", icon="🗺️")
+
+st.markdown(
+    "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports</sub>",
+    unsafe_allow_html=True,
 )
-
-view_state = pdk.ViewState(latitude=40.4, longitude=-3.7, zoom=4, pitch=30)
-
-tooltip = {
-    "html": (
-        "<b>{dest_iata}</b><br/>"
-        "Airline: {airline_name}<br/>"
-        "Source: {source}"
-    ),
-    "style": {"backgroundColor": "#1a1a2e", "color": "white", "fontSize": "13px"},
-}
-
-st.pydeck_chart(
-    pdk.Deck(
-        layers=[arc_layer],
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-    ),
-    width="stretch",
-)
-
-st.caption(SOURCE_INFO.get(selected_source, ("", ""))[1])
