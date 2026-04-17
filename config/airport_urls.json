@@ -1,0 +1,19 @@
+{
+  "_note": "IATA → verified AENA destination page URL. Update when AENA restructures their site. Migrated from 2022 url_remediation dict — treat as hints, validate each URL during Phase 2g before use.",
+  "LEI": "https://www.aena.es/es/almeria/aerolineas-y-destinos/destinos-del-aeropuerto-de-almeria.html",
+  "OVD": "https://www.aena.es/es/asturias/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "BJZ": "https://www.aena.es/es/badajoz/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "ACE": "https://www.aena.es/es/cesar-manrique-lanzarote/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "VDE": "https://www.aena.es/es/el-hierro/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "GRX": "https://www.aena.es/es/f.g.l.-granada-jaen/aerolineas-y-destinos/destinos.html",
+  "FUE": "https://www.aena.es/es/fuerteventura/aerolineas-y-destinos-fue/destinos-aeropuerto-fue.html",
+  "LPA": "https://www.aena.es/es/gran-canaria/aerolineas-y-destinos/destinos-del-aeropuerto-gran-canaria.html",
+  "RMU": "https://www.aena.es/es/internacional-region-de-murcia/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "XRY": "https://www.aena.es/es/jerez/aerolineas-y-destinos/.html",
+  "MAH": "https://www.aena.es/es/destinos-del-aeropuerto-menorca.html",
+  "PNA": "https://www.aena.es/es/pamplona/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "TFN": "https://www.aena.es/es/tenerife-norte-ciudad-de-la-laguna/aerolineas-destinos/destinos-del-aeropuerto.html",
+  "VLC": "https://www.aena.es/es/valencia/aerolineas-destinos/destinos-aeropuerto.html",
+  "VLL": "https://www.aena.es/es/valladolid/aerolineas-y-destinos/destinos-del-aeropuerto.html",
+  "VIT": "https://www.aena.es/es/vitoria/aerolineas-y-destinos/destinos-del-aeropuerto.html"
+}
