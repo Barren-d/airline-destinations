@@ -113,12 +113,6 @@ with st.sidebar:
     airline_filter = st.selectbox("Airline", all_airlines)
 
     cmap = country_lookup()
-
-    origin_countries = sorted({
-        cmap.get(iata, "") for iata in df["origin_iata"].unique().to_list() if cmap.get(iata)
-    })
-    origin_country_filter = st.selectbox("Origin country", ["All"] + origin_countries)
-
     dest_countries = sorted({
         cmap.get(iata, "") for iata in df["dest_iata"].unique().to_list() if cmap.get(iata)
     })
@@ -143,10 +137,6 @@ if origin_filter != "All":
 
 if airline_filter != "All":
     filtered = filtered.filter(pl.col("airline_name") == airline_filter)
-
-if origin_country_filter != "All" and cmap:
-    in_orig_country = {k for k, v in cmap.items() if v == origin_country_filter}
-    filtered = filtered.filter(pl.col("origin_iata").is_in(in_orig_country))
 
 if dest_country_filter != "All" and cmap:
     in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
