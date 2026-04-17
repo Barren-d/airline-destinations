@@ -1,5 +1,12 @@
 """PyFly — interactive great circle route visualisation. Read-only consumer of DuckDB."""
+import sys
 from pathlib import Path
+
+# Ensure the repo root is on sys.path so absolute imports work when Streamlit
+# loads this file as a script rather than as part of an installed package.
+_ROOT = Path(__file__).parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import polars as pl
 import pydeck as pdk
