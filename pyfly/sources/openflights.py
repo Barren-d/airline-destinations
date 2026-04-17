@@ -1,7 +1,7 @@
 """OpenFlights historical source — routes.dat circa 2017, all scopes."""
 from pathlib import Path
 import polars as pl
-from .base import FlightSource, Scope, AENA_IATA
+from .base import FlightSource, Scope, AENA_IATA, PORTUGAL_IATA
 from ..enrich import enrich, load_airports, load_airlines
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -25,6 +25,7 @@ GLOBAL_TOP_100_IATA = EUROPEAN_IATA | {
 
 SCOPE_MAP = {
     Scope.AENA: AENA_IATA,
+    Scope.PORTUGAL: PORTUGAL_IATA,
     Scope.EUROPEAN: EUROPEAN_IATA,
     Scope.GLOBAL_TOP_100: GLOBAL_TOP_100_IATA,
 }
@@ -33,7 +34,7 @@ SCOPE_MAP = {
 class OpenFlightsSource(FlightSource):
     name = "Historical (2017)"
     requires_auth = False
-    supports_scopes = [Scope.AENA, Scope.EUROPEAN, Scope.GLOBAL_TOP_100, Scope.CUSTOM]
+    supports_scopes = [Scope.AENA, Scope.PORTUGAL, Scope.EUROPEAN, Scope.GLOBAL_TOP_100, Scope.CUSTOM]
 
     def is_available(self) -> bool:
         return (DATA_DIR / "routes.dat").exists() and (DATA_DIR / "airlines.dat").exists()
@@ -60,6 +61,7 @@ class OpenFlightsSource(FlightSource):
             .drop_nulls()
         )
 
+        source_tag = "openflights_portugal" if scope == Scope.PORTUGAL else "openflights_2017"
         airports = load_airports()
         airlines = load_airlines()
-        return enrich(routes, airports, airlines, source="openflights_2017")
+        return enrich(routes, airports, airlines, source=source_tag)

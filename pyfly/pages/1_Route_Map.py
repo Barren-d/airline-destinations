@@ -24,7 +24,8 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 SOURCE_INFO = {
     "aena": "Scraped from aena.es — current scheduled routes.",
-    "openflights_2017": "OpenFlights database circa 2017. Useful for pre-COVID comparison.",
+    "openflights_portugal": "ANA Portugal airports (LIS, OPO, FAO, Madeira, Azores) — OpenFlights circa 2017.",
+    "openflights_2017": "AENA network — OpenFlights database circa 2017. Useful for pre-COVID comparison.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
 
@@ -76,6 +77,7 @@ with st.sidebar:
     sky_ok = _opensky_available()
     source_options = {
         "AENA Live": "aena",
+        "Portugal (2017)": "openflights_portugal",
         "Historical (2017)": "openflights_2017",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -111,10 +113,16 @@ with st.sidebar:
     airline_filter = st.selectbox("Airline", all_airlines)
 
     cmap = country_lookup()
+
+    origin_countries = sorted({
+        cmap.get(iata, "") for iata in df["origin_iata"].unique().to_list() if cmap.get(iata)
+    })
+    origin_country_filter = st.selectbox("Origin country", ["All"] + origin_countries)
+
     dest_countries = sorted({
         cmap.get(iata, "") for iata in df["dest_iata"].unique().to_list() if cmap.get(iata)
     })
-    country_filter = st.selectbox("Dest country", ["All"] + dest_countries)
+    dest_country_filter = st.selectbox("Dest country", ["All"] + dest_countries)
 
     st.markdown("---")
     st.subheader("Arc density")
@@ -136,9 +144,13 @@ if origin_filter != "All":
 if airline_filter != "All":
     filtered = filtered.filter(pl.col("airline_name") == airline_filter)
 
-if country_filter != "All" and cmap:
-    in_country = {k for k, v in cmap.items() if v == country_filter}
-    filtered = filtered.filter(pl.col("dest_iata").is_in(in_country))
+if origin_country_filter != "All" and cmap:
+    in_orig_country = {k for k, v in cmap.items() if v == origin_country_filter}
+    filtered = filtered.filter(pl.col("origin_iata").is_in(in_orig_country))
+
+if dest_country_filter != "All" and cmap:
+    in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
+    filtered = filtered.filter(pl.col("dest_iata").is_in(in_dest_country))
 
 capped = False
 if origin_filter == "All" and len(filtered) > max_arcs:

@@ -11,6 +11,7 @@ CACHE_TTL_HOURS = 24
 PARQUET_SOURCES = {
     "aena": DATA_DIR / "routes_aena.parquet",
     "openflights_2017": DATA_DIR / "routes_openflights.parquet",
+    "openflights_portugal": DATA_DIR / "routes_portugal.parquet",
 }
 
 

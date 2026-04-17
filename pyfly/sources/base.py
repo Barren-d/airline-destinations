@@ -5,6 +5,7 @@ import polars as pl
 
 class Scope(Enum):
     AENA = "aena"
+    PORTUGAL = "portugal"
     EUROPEAN = "european"
     GLOBAL_TOP_100 = "global_top_100"
     CUSTOM = "custom"
@@ -20,6 +21,13 @@ SCHEMA = {
     "airline_iata": pl.Utf8,
     "airline_name": pl.Utf8,
     "source": pl.Utf8,
+}
+
+PORTUGAL_IATA = {
+    # ANA Aeroportos de Portugal — mainland, Madeira, Azores
+    "LIS", "OPO", "FAO",        # mainland
+    "FNC", "PXO",               # Madeira
+    "PDL", "TER", "HOR", "FLW", "SMA", "PIX", "GRW", "SJZ",  # Azores
 }
 
 AENA_IATA = {
