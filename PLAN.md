@@ -155,13 +155,15 @@ source provenance for everything it renders.
 
 ---
 
-## AENA Airport IATA Codes (46 airports)
+## AENA Airport IATA Codes (43 commercial airports)
+
+Extracted from aena.es 2026-04-17. Excludes heliports (AEI, JCU) and GA fields (LECU, LESB, RGS).
+Source of truth is `config/airport_urls.json`.
 
 ```
-MAD BCN AGP PMI ALC SVQ TFS LPA IBZ VLC BIO SDR VGO SCQ
-ACE FUE MAH GRX ZAZ LEI OVD XRY VIT PNA VLL RMU TFN VDE
-GMZ BJZ HSK ABC ODB RJL LEN QSA SLM MRS REU GRO ORY LCY
-MLN JER EAS MJV
+LCG MAD ABC ALC LEI OVD BJZ BIO ACE ODB VDE GRX FUE GRO
+LPA HSK IBZ RMU XRY BCN GMZ SPC LEN RJL MLN MAH AGP PMI
+PNA REU QSA SLM EAS SCQ SDR SVQ TFN TFS VLC VLL VGO VIT ZAZ
 ```
 
 ---
@@ -776,11 +778,11 @@ Nothing else changes.
 
 Check status and continue from the first pending phase.
 
-- [ ] Phase 0  — Environment + git init + pyproject.toml + playwright install
-- [ ] Phase 1  — Archive 2022 scripts
-- [ ] Phase 2  — Download data assets + OpenSky registration + airport_urls.json + anti-bot check
-- [ ] Phase 3  — Scaffold package structure
-- [ ] Phase 3b — Define smoke tests (will fail until Phases 4–5 complete)
+- [x] Phase 0  — Environment + git init + pyproject.toml + playwright install
+- [x] Phase 1  — Archive 2022 scripts
+- [x] Phase 2  — Download data assets + OpenSky registration + airport_urls.json + anti-bot check
+- [x] Phase 3  — Scaffold package structure
+- [x] Phase 3b — Define smoke tests (will fail until Phases 4–5 complete)
 - [ ] Phase 4  — AENA scraper source (playwright, config-driven, DuckDB cache)
 - [ ] Phase 4b — OpenFlights historical source (all scopes, airline names)
 - [ ] Phase 5  — OpenSky live source (API + DuckDB cache)

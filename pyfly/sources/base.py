@@ -23,10 +23,13 @@ SCHEMA = {
 }
 
 AENA_IATA = {
-    "MAD", "BCN", "AGP", "PMI", "ALC", "SVQ", "TFS", "LPA", "IBZ", "VLC",
-    "BIO", "SDR", "VGO", "SCQ", "ACE", "FUE", "MAH", "GRX", "ZAZ", "LEI",
-    "OVD", "XRY", "VIT", "PNA", "VLL", "RMU", "TFN", "VDE", "GMZ", "BJZ",
-    "HSK", "ABC", "ODB", "RJL", "LEN", "QSA", "SLM", "MRS", "REU", "GRO",
+    # Extracted from aena.es/es/pasajeros/nuestros-aeropuertos.html 2026-04-17
+    # 43 commercial airports — excludes heliports (AEI, JCU) and GA fields (LECU, LESB, RGS)
+    "LCG", "MAD", "ABC", "ALC", "LEI", "OVD", "BJZ", "BIO", "ACE", "ODB",
+    "VDE", "GRX", "FUE", "GRO", "LPA", "HSK", "IBZ", "RMU", "XRY", "BCN",
+    "GMZ", "SPC", "LEN", "RJL", "MLN", "MAH", "AGP", "PMI", "PNA", "REU",
+    "QSA", "SLM", "EAS", "SCQ", "SDR", "SVQ", "TFN", "TFS", "VLC", "VLL",
+    "VGO", "VIT", "ZAZ",
 }
 
 
