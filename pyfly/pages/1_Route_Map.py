@@ -201,11 +201,11 @@ st.pydeck_chart(
     pdk.Deck(
         layers=[arc_layer],
         initial_view_state=pdk.ViewState(
-            latitude=38.5,   # centre lower to balance Canary Islands weight
-            longitude=-5.0,
-            zoom=4.8,
-            pitch=45,        # steeper angle fills vertical space better
-            bearing=-10,     # slight rotation breaks the rectangular feel
+            latitude=40.0,
+            longitude=-4.5,
+            zoom=5.0,
+            pitch=25,
+            bearing=0,
         ),
         tooltip=tooltip,
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
