@@ -783,8 +783,8 @@ Check status and continue from the first pending phase.
 - [x] Phase 2  — Download data assets + OpenSky registration + airport_urls.json + anti-bot check
 - [x] Phase 3  — Scaffold package structure
 - [x] Phase 3b — Define smoke tests (will fail until Phases 4–5 complete)
-- [ ] Phase 4  — AENA scraper source (playwright, config-driven, DuckDB cache)
-- [ ] Phase 4b — OpenFlights historical source (all scopes, airline names)
+- [x] Phase 4  — AENA scraper source (playwright, config-driven, DuckDB cache)
+- [x] Phase 4b — OpenFlights historical source (all scopes, airline names)
 - [ ] Phase 5  — OpenSky live source (API + DuckDB cache)
 - [ ] Phase 6  — Error handling across all sources + Streamlit feedback
 - [ ] Phase 7  — Core pipeline: ingest → enrich → db, CLI runnable
