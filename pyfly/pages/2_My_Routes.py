@@ -334,7 +334,7 @@ with st.sidebar:
     with st.form("route_form", clear_on_submit=True):
         route_text = st.text_input(
             "Route",
-            placeholder="BCN-FRA  or  Frankfurt to Paris  or  Kuala Lumpur - Butterworth, Malaysia",
+            placeholder="FRA-CDG  or  Paris to London",
             help="Separate stops with  -  or  'to'. Use 'City, Country' for ambiguous places.",
         )
         add_clicked = st.form_submit_button("Add route", type="primary", use_container_width=True)
