@@ -24,17 +24,18 @@ GLOBAL_TOP_100_IATA = EUROPEAN_IATA | {
 }
 
 SCOPE_MAP = {
-    Scope.AENA: AENA_IATA,
+    Scope.AENA: AENA_IATA | PORTUGAL_IATA,
     Scope.PORTUGAL: PORTUGAL_IATA,
     Scope.EUROPEAN: EUROPEAN_IATA,
     Scope.GLOBAL_TOP_100: GLOBAL_TOP_100_IATA,
+    Scope.GLOBAL_ALL: None,  # None = no origin filter
 }
 
 
 class OpenFlightsSource(FlightSource):
     name = "Historical (2017)"
     requires_auth = False
-    supports_scopes = [Scope.AENA, Scope.PORTUGAL, Scope.EUROPEAN, Scope.GLOBAL_TOP_100, Scope.CUSTOM]
+    supports_scopes = [Scope.AENA, Scope.PORTUGAL, Scope.EUROPEAN, Scope.GLOBAL_TOP_100, Scope.GLOBAL_ALL, Scope.CUSTOM]
 
     def is_available(self) -> bool:
         return (DATA_DIR / "routes.dat").exists() and (DATA_DIR / "airlines.dat").exists()
@@ -52,16 +53,17 @@ class OpenFlightsSource(FlightSource):
             ],
         )
 
-        # Filter to chosen scope and direct flights only
+        routes = routes.filter(pl.col("stops") == 0)
+        if origin_filter is not None:
+            routes = routes.filter(pl.col("src_iata").is_in(origin_filter))
         routes = (
-            routes.filter(pl.col("src_iata").is_in(origin_filter))
-            .filter(pl.col("stops") == 0)
+            routes
             .select(["airline_iata", "src_iata", "dst_iata"])
             .rename({"src_iata": "origin_iata", "dst_iata": "dest_iata"})
             .drop_nulls()
         )
 
-        source_tag = "openflights_portugal" if scope == Scope.PORTUGAL else "openflights_2017"
+        source_tag = "openflights_global" if scope == Scope.GLOBAL_ALL else "openflights_2017"
         airports = load_airports()
         airlines = load_airlines()
         return enrich(routes, airports, airlines, source=source_tag)

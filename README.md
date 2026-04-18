@@ -1,15 +1,17 @@
 # ✈ PyFly
 
-Interactive great circle route visualisation for the **AENA Spanish airport network**.
+Interactive great circle route visualisation for **global flight routes**.
 
-PyFly maps every scheduled flight route across Spain's 43 commercial airports as
-geodesic arcs — origin to destination, coloured by direction, hoverable for airline
-detail. Toggle between live scraped data, a 2017 historical baseline, and real-time
-OpenSky flight records.
+PyFly maps scheduled and historical flight routes as geodesic arcs — origin to
+destination, coloured by direction, hoverable for airline detail. Explore the live
+AENA Spanish network, a 2017 global historical baseline covering 3,400+ airports,
+or real-time OpenSky flight records. Filter by country, airport, and airline.
 
 ---
 
 ## What it looks like
+
+![PyFly route map — Barcelona routes](img/aena_barcelona_routes.png)
 
 Each arc represents a direct route. Orange end = origin, blue end = destination.
 Hover any arc for the destination code, airline name, and data source.

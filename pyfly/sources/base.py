@@ -8,6 +8,7 @@ class Scope(Enum):
     PORTUGAL = "portugal"
     EUROPEAN = "european"
     GLOBAL_TOP_100 = "global_top_100"
+    GLOBAL_ALL = "global_all"
     CUSTOM = "custom"
 
 

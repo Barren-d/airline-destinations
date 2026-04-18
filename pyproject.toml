@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pytest>=8.0",
     "pandas>=2.0",
+    "pycountry>=24.0",
 ]
 
 # Scraper deps only needed for CLI ingestion, not the Streamlit app.

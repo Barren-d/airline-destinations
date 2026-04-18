@@ -2,7 +2,7 @@ name: AENA route scrape
 
 on:
   schedule:
-    - cron: '0 4 * * *'   # 04:00 UTC daily
+    - cron: '0 4 1 * *'   # 04:00 UTC on the 1st of each month
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
 jobs:
