@@ -774,6 +774,165 @@ Nothing else changes.
 
 ---
 
+---
+
+## Phase 10 — My Routes (Personal Travel Map)
+
+**Goal:** A new page where users can log their own travel history — flights, trains, boats and
+car journeys — visualised as arcs and lines on an interactive map, persisted via URL state.
+
+**Status:** `[ ] pending`
+
+---
+
+### Data model
+
+Each entry the user logs:
+
+```python
+{
+    "legs":  ["BCN", "FRA", "SIN"],   # parsed tokens — airport codes or geocoded city names
+    "mode":  "plane" | "train" | "boat" | "car",
+    "date":  "Summer 2019",           # optional free text, no validation
+}
+```
+
+Multi-leg inputs (e.g. `BCN-FRA-SIN`) expand into arc segments at render time:
+BCN→FRA and FRA→SIN. Stopovers appear as intermediate nodes on the map.
+
+**Route consolidation:** arcs are normalised to `(min(a,b), max(a,b))` before rendering.
+BCN→FRA and FRA→BCN are the same route. Arc width scales with **total trip count**
+across all entries sharing that pair, regardless of direction.
+
+**Width scale (log-capped):**
+
+| Trips | Width |
+|-------|-------|
+| 1 | 2px |
+| 2 | 3.5px |
+| 3 | 5px |
+| 4+ | 7px (cap) |
+
+---
+
+### Visual encoding
+
+| Mode | Colour | Layer type | Notes |
+|------|--------|------------|-------|
+| Plane | Amber `#F59E0B` | `ArcLayer` | Lifted great circle arc |
+| Train | Emerald `#10B981` | `LineLayer` | Flat line on map surface |
+| Boat | Cyan `#06B6D4` | `LineLayer` | Flat line on map surface |
+| Car | Rose `#F43F5E` | `LineLayer` | Flat line on map surface |
+
+Directionality (orange/blue ends) dropped — flat colour both ends per transport type.
+
+**Node layer (`ScatterplotLayer`):**
+- Origin / destination airports → larger filled circle
+- Stopover / transit nodes → smaller, dimmer circle
+- Geocoded city/port stops (non-airport) → square marker, visually distinct from airport circles
+
+Antimeridian longitude normalisation applied to both `ArcLayer` and `LineLayer` data.
+
+---
+
+### Input UX
+
+1. Text box: user types `BCN-FRA`, `Barcelona-Frankfurt`, or mixed `BCN-Frankfurt`
+2. Each token resolved in order:
+   - Exact 3-letter IATA match → used immediately (plane mode only)
+   - Fuzzy name match via `rapidfuzz` against `airports.csv` → for plane mode
+   - Nominatim geocoder via `geopy` → for train / boat / car stops
+   - If multiple matches: show `st.selectbox` confirmation — never silently pick wrong airport
+3. Mode selector: `✈ Plane / 🚂 Train / ⛴ Boat / 🚗 Car`
+4. Date field: free text string (e.g. "Summer 2019", "2024-03") — no validation
+5. **Add** button → appends to `st.session_state` and updates URL
+
+Nominatim calls are synchronous (1 req/sec free tier — acceptable for single user at input
+time). Results cached in `st.session_state` so the same city is never looked up twice.
+
+---
+
+### Edit / Remove
+
+Read-only table showing all logged entries (route string, mode, date).
+Each row has a 🗑 delete button. To edit a route: delete and re-enter.
+No `st.data_editor` — avoids re-parse-on-cell-edit complexity.
+
+---
+
+### Persistence — URL state
+
+Route list serialised as base64 JSON and stored in `st.query_params`:
+
+```
+https://pyfly-routes.streamlit.app/My_Routes?r=BASE64...
+```
+
+- URL updates live on every add/delete
+- User bookmarks or copies URL to resume
+- Shareable — someone else opening the URL sees the same map
+- **JSON download/upload** also provided from day one as a fallback for long sessions
+  (URL length becomes unwieldy at ~100+ routes)
+
+---
+
+### Stats bar
+
+```
+✈ 12 flights  🚂 3 trains  ⛴ 1 boat  🚗 4 drives
+🌍 14 countries  ·  28 airports  ·  47,320 km
+```
+
+Distance computed as haversine great circle between each leg pair using coordinates
+from `airports.csv` or geocoder result.
+
+---
+
+### Page structure
+
+```
+pages/2_My_Routes.py
+
+Sidebar
+├── Route input text box  (e.g. BCN-FRA or Barcelona-Frankfurt)
+├── Mode selector  ✈ 🚂 ⛴ 🚗
+├── Date  (free text, optional)
+├── Add button
+├── ─────────────────
+├── Route list (read-only, one row per entry, 🗑 per row)
+└── Share: [ Copy URL ]  [ Download JSON ]  [ Upload JSON ]
+
+Main
+├── Stats bar
+└── Map  (ArcLayer + LineLayer + ScatterplotLayer)
+```
+
+---
+
+### New dependencies
+
+| Package | Why |
+|---------|-----|
+| `rapidfuzz` | Fuzzy airport name matching for plane mode |
+| `geopy` | Nominatim geocoding for train / boat / car stops |
+
+---
+
+### Key decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Thickness = trip count, directionality dropped | Frequency is more meaningful than direction for personal history |
+| LineLayer for ground/sea, ArcLayer for plane | Visually communicates surface vs air travel without needing dashes |
+| Delete-and-reenter instead of inline edit | Eliminates re-geocode-on-edit state complexity |
+| URL params as primary persistence | No backend needed; bookmarkable and shareable |
+| JSON download as secondary persistence | Covers edge case of very long route lists |
+| Free text date | Zero friction; avoids st.date_input state management overhead |
+| Always show confirmation selectbox on ambiguous match | Silent wrong-airport bugs are worse than one extra click |
+| Nominatim with session_state cache | Free, no data file, rate limit irrelevant at human typing speed |
+
+---
+
 ## Resume Checklist
 
 Check status and continue from the first pending phase.
@@ -789,4 +948,5 @@ Check status and continue from the first pending phase.
 - [ ] Phase 6  — Error handling across all sources + Streamlit feedback
 - [ ] Phase 7  — Core pipeline: ingest → enrich → db, CLI runnable
 - [ ] Phase 8  — Streamlit app (read-only, toggle, scope, density, ArcLayer)
-- [ ] Phase 9  — Streamlit Cloud deploy + GitHub Actions scrape schedule
+- [x] Phase 9  — Streamlit Cloud deploy + GitHub Actions scrape schedule
+- [ ] Phase 10 — My Routes page (personal travel map, URL persistence, multi-mode)
