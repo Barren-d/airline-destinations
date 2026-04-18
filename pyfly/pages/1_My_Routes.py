@@ -563,6 +563,9 @@ arc_rows, line_rows, node_rows, total_km = _build_render_data(st.session_state.r
 counts, n_airports, n_cities, n_countries = _stats(st.session_state.routes)
 
 # Stats bar
+n_routes = len(st.session_state.routes)
+st.title(f"🧳 {n_routes} {'route' if n_routes == 1 else 'routes'} logged")
+
 parts = [
     f"{MODE_ICONS[m]} {c} {MODE_TRIP_LABEL[m][1 if c > 1 else 0]}"
     for m, c in counts.items() if c
@@ -574,7 +577,7 @@ if n_airports:
 if n_cities:
     parts.append(f"🏙 {n_cities} {'cities' if n_cities != 1 else 'city'}")
 parts.append(f"📏 {total_km:,.0f} km")
-st.markdown(f"### {('  ·  ').join(parts)}")
+st.caption(("  ·  ").join(parts))
 
 # Map view: centre on the most recently added route, fall back to all nodes
 focus = st.session_state.get("_focus_nodes") or node_rows
