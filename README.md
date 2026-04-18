@@ -2,18 +2,25 @@
 
 **Live app: [pyfly-routes.streamlit.app](https://pyfly-routes.streamlit.app/)**
 
-Interactive great circle route visualisation for **global flight routes**.
+Map your personal travel history and explore the world's flight network.
 
-PyFly maps scheduled and historical flight routes as geodesic arcs — origin to
-destination, coloured by direction, hoverable for airline detail. Explore the live
-AENA Spanish network, a 2017 global historical baseline covering 3,400+ airports,
-or real-time OpenSky flight records. Filter by country, airport, and airline.
+PyFly has two pages:
+- **My Routes** — log every route you've taken (flights, trains, boats, cars). Arcs thicken by how many times you've done the route, coloured by mode. Share via URL or export as JSON.
+- **Route Explorer** — browse scheduled and historical flight routes as great circle arcs. Explore the live AENA Spanish network, a 2017 global baseline covering 3,400+ airports, or real-time OpenSky records.
 
 ---
 
 ## What it looks like
 
-![PyFly route map — Barcelona routes](img/aena_barcelona_routes.png)
+### My Routes
+
+![PyFly My Routes — personal travel map](img/my_routes_example.png)
+
+Log routes by typing `BCN-LHR`, `Paris to London`, or `Frankfurt - Madrid`. Flights render as lifted arcs, ground transport as flat lines. Arcs thicken when you've repeated a route. Stats bar shows total flights, countries, airports, and distance.
+
+### Route Explorer
+
+![PyFly Route Explorer — Barcelona routes](img/aena_barcelona_routes.png)
 
 Each arc represents a direct route. Orange end = origin, blue end = destination.
 Hover any arc for the destination code, airline name, and data source.
