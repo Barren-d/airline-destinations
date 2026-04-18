@@ -155,7 +155,7 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False}
+    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0}
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -180,6 +180,7 @@ def _slim(entry: dict) -> dict:
     return {
         "legs": entry["legs"],
         "mode": entry["mode"],
+        "tag": entry.get("tag", ""),
         "date": entry.get("date", ""),
         "nodes": [
             {"iata": n["iata"]} if n.get("iata")
@@ -302,7 +303,8 @@ def _stats(routes):
     airports, cities, countries = set(), set(), set()
     iata_map = _iata_map()
     for entry in routes:
-        counts[entry["mode"]] += 1
+        legs = max(1, len(entry.get("nodes") or []) - 1)
+        counts[entry["mode"]] += legs
         for node in entry.get("nodes") or []:
             if not node:
                 continue
@@ -323,40 +325,49 @@ def _stats(routes):
 _init_state()
 _load_url_once()
 
-# mode_label persists across reruns via Streamlit's widget state
-if "mode_label" not in st.session_state:
-    st.session_state.mode_label = list(MODES)[0]
-
 with st.sidebar:
     st.subheader("Log a route")
+
+    mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
+    mode = MODES[mode_label]
 
     with st.form("route_form", clear_on_submit=True):
         route_text = st.text_input(
             "Route",
-            placeholder="BCN - FRA  or  Kuala Lumpur - Butterworth, Malaysia",
-            help="Separate stops with  -  (spaces around the dash). Use 'City, Country' for ambiguous places.",
+            placeholder="BCN-FRA  or  Frankfurt to Paris  or  Kuala Lumpur - Butterworth, Malaysia",
+            help="Separate stops with  -  or  'to'. Use 'City, Country' for ambiguous places.",
         )
-        mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
         add_clicked = st.form_submit_button("Add route", type="primary", use_container_width=True)
 
     st.text_input(
         "Tag (optional)",
         placeholder="Summer 2025",
-        help="Label for this route or group of routes — stays set as you add multiple stops.",
+        help="Stays set as you add multiple stops — useful for grouping a whole trip.",
         key="persistent_tag",
     )
+    st.text_input(
+        "Date (optional)",
+        placeholder="2025-07-14",
+        help="Specific date for this route — clears after each addition.",
+        key=f"route_date_{st.session_state._date_clear}",
+    )
     tag_text = st.session_state.get("persistent_tag", "")
+    date_text = st.session_state.get(f"route_date_{st.session_state._date_clear}", "")
 
     mode = MODES[mode_label]
 
     if add_clicked and route_text.strip():
-        # Split on " - " first (allows dashes in place names like Bora-Bora).
-        # Fall back to "-" only when no spaced delimiter found (pure IATA: BCN-FRA-SIN).
+        import re as _re
         raw = route_text.strip()
-        if " - " in raw:
-            tokens = [t.strip() for t in raw.split(" - ") if t.strip()]
+        # Replace "to" keyword with a safe internal separator
+        normalised = _re.sub(r"\s+to\s+", " | ", raw, flags=_re.IGNORECASE)
+        if " - " in normalised or " | " in normalised:
+            # Spaced delimiters present — split on those only, leaving unspaced
+            # dashes intact so place names like Bora-Bora are preserved.
+            tokens = [t.strip() for t in _re.split(r" - | \| ", normalised) if t.strip()]
         else:
-            tokens = [t.strip() for t in raw.split("-") if t.strip()]
+            # No spaces around dashes — treat as pure IATA shorthand: BCN-FRA-SIN
+            tokens = [t.strip() for t in normalised.split("-") if t.strip()]
         if len(tokens) < 2:
             st.error("Enter at least two stops, e.g. BCN-FRA")
         else:
@@ -372,17 +383,20 @@ with st.sidebar:
                 st.session_state.routes.append({
                     "legs": tokens,
                     "mode": mode,
-                    "date": tag_text.strip(),
+                    "tag": tag_text.strip(),
+                    "date": date_text.strip(),
                     "nodes": [r["resolved"] for r in resolutions],
                 })
                 st.session_state.pending = None
+                st.session_state._date_clear += 1
                 _sync_url()
                 st.rerun()
             else:
                 st.session_state.pending = {
                     "resolutions": resolutions,
                     "mode": mode,
-                    "date": tag_text.strip(),
+                    "tag": tag_text.strip(),
+                    "date": date_text.strip(),
                     "tokens": tokens,
                 }
 
@@ -412,41 +426,48 @@ with st.sidebar:
             st.session_state.routes.append({
                 "legs": p["tokens"],
                 "mode": p["mode"],
-                "date": p["date"],
+                "tag": p.get("tag", ""),
+                "date": p.get("date", ""),
                 "nodes": [r["resolved"] for r in updated],
             })
             st.session_state.pending = None
+            st.session_state._date_clear += 1
             _sync_url()
             st.rerun()
 
     st.markdown("---")
 
     if st.session_state.routes:
-        st.subheader("Your routes")
-        for i, entry in enumerate(list(st.session_state.routes)):
-            icon = MODE_ICONS[entry["mode"]]
-            label = " – ".join(entry["legs"])
-            date = f" · {entry['date']}" if entry.get("date") else ""
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.caption(f"{icon} {label}{date}")
-            with col2:
-                if st.button("🗑", key=f"del_{i}", help="Remove this route"):
-                    st.session_state.routes.pop(i)
-                    _sync_url()
-                    st.rerun()
-
         if st.button("🗑 Delete all routes", use_container_width=True):
             st.session_state.routes = []
             st.session_state.pending = None
             _sync_url()
             st.rerun()
 
+        st.subheader("Your routes")
+        routes_display = list(enumerate(st.session_state.routes))[::-1]
+        for i, entry in routes_display:
+            icon = MODE_ICONS[entry["mode"]]
+            label = " – ".join(entry["legs"])
+            meta = "  ".join(filter(None, [entry.get("tag"), entry.get("date")]))
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                st.caption(f"{icon} {label}")
+                if meta:
+                    st.caption(f"   {meta}")
+            with col2:
+                if st.button("🗑", key=f"del_{i}", help="Remove this route"):
+                    st.session_state.routes.pop(i)
+                    _sync_url()
+                    st.rerun()
+
         st.markdown("---")
         st.subheader("Share")
 
         url_val = f"https://pyfly-routes.streamlit.app/My_Routes?r={st.query_params.get('r', '')}"
         st.text_input("URL", value=url_val, label_visibility="collapsed")
+        if len(url_val) > 800:
+            st.caption("URL is getting long — use Download JSON for reliable sharing.")
 
         st.download_button(
             "⬇ Download JSON",
@@ -458,12 +479,19 @@ with st.sidebar:
 
         uploaded = st.file_uploader("⬆ Upload JSON", type="json", label_visibility="collapsed")
         if uploaded:
-            try:
-                st.session_state.routes = json.loads(uploaded.read().decode())
-                _sync_url()
-                st.rerun()
-            except Exception:
-                st.error("Invalid JSON file.")
+            if uploaded.size > 512_000:
+                st.error("File too large — expected a small PyFly routes export.")
+            else:
+                try:
+                    data = json.loads(uploaded.read().decode())
+                    if not isinstance(data, list) or not all(isinstance(r, dict) and "legs" in r for r in data):
+                        st.error("Invalid format — expected a PyFly routes JSON export.")
+                    else:
+                        st.session_state.routes = data
+                        _sync_url()
+                        st.rerun()
+                except Exception:
+                    st.error("Invalid JSON file.")
     else:
         st.caption("No routes logged yet.")
 
