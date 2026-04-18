@@ -12,6 +12,8 @@ dependencies = [
     "pytest>=8.0",
     "pandas>=2.0",
     "pycountry>=24.0",
+    "rapidfuzz>=3.14.5",
+    "geopy>=2.4.1",
 ]
 
 # Scraper deps only needed for CLI ingestion, not the Streamlit app.
