@@ -1,5 +1,7 @@
 # ✈ PyFly
 
+**Live app: [pyfly-routes.streamlit.app](https://pyfly-routes.streamlit.app/)**
+
 Interactive great circle route visualisation for **global flight routes**.
 
 PyFly maps scheduled and historical flight routes as geodesic arcs — origin to
