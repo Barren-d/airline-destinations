@@ -26,7 +26,7 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 
 | Source | What | Freshness | Auth |
 |---|---|---|---|
-| **AENA Live** | Current scheduled routes scraped from aena.es | Daily (GitHub Actions) | None |
+| **AENA Live** | Current scheduled routes scraped from aena.es | Monthly (GitHub Actions) | None |
 | **Historical (2017)** | OpenFlights open dataset, pre-COVID baseline | Static | None |
 | **OpenSky** | Actual flights flown in the last 7 days | On demand, 24h cache | Free account |
 
@@ -139,8 +139,9 @@ The app reads from the committed parquet snapshots on cold start — no scraping
 needed in the cloud environment, and no Playwright dependency required.
 
 The GitHub Actions workflow (`.github/workflows/scrape.yml`) runs the AENA scraper
-daily at 04:00 UTC and commits the updated parquet back to the repo. Streamlit Cloud
-picks up the new commit automatically.
+on the 1st of each month at 04:00 UTC and commits the updated parquet back to the repo.
+Streamlit Cloud picks up the new commit automatically. It can also be triggered manually
+from the GitHub Actions tab.
 
 ---
 
