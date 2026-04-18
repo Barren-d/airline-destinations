@@ -30,7 +30,7 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 # Constants
 # ---------------------------------------------------------------------------
 
-MODES = {"✈ Plane": "plane", "🚂 Train": "train", "⛴ Boat": "boat", "🚗 Car": "car"}
+MODES = {"✈ Plane": "plane", "🚂 Train": "train", "⛴ Boat": "boat", "🚗 Car / Bus": "car"}
 MODE_ICONS = {"plane": "✈", "train": "🚂", "boat": "⛴", "car": "🚗"}
 MODE_TRIP_LABEL = {"plane": ("flight", "flights"), "train": ("train", "trains"), "boat": ("voyage", "voyages"), "car": ("ride", "rides")}
 
@@ -63,12 +63,11 @@ def _airport_df() -> pl.DataFrame:
     path = DATA_DIR / "airports.csv"
     if not path.exists():
         return pl.DataFrame()
-    return (
-        pl.read_csv(path)
-        .filter(pl.col("iata_code").is_not_null() & (pl.col("iata_code") != ""))
-        .select(["iata_code", "name", "latitude_deg", "longitude_deg", "iso_country"])
-        .rename({"latitude_deg": "lat", "longitude_deg": "lon"})
-    )
+    df = pl.read_csv(path).filter(pl.col("iata_code").is_not_null() & (pl.col("iata_code") != ""))
+    cols = ["iata_code", "name", "latitude_deg", "longitude_deg", "iso_country"]
+    if "municipality" in df.columns:
+        cols.append("municipality")
+    return df.select(cols).rename({"latitude_deg": "lat", "longitude_deg": "lon"})
 
 
 @st.cache_data
@@ -77,11 +76,27 @@ def _iata_map() -> dict:
 
 
 @st.cache_data
-def _fuzzy_corpus() -> list[str]:
-    return [
-        f"{r['name']} ({r['iata_code']})"
-        for r in _airport_df().iter_rows(named=True)
-    ]
+def _fuzzy_data() -> tuple[list[str], list[dict]]:
+    """Returns (search_strings, info_dicts) — parallel lists for fuzzy matching.
+
+    Search strings include municipality so "Cartagena" matches CTG even though
+    the airport name is "Rafael Núñez International Airport".
+    """
+    results_search, results_info = [], []
+    for r in _airport_df().iter_rows(named=True):
+        muni = (r.get("municipality") or "").strip()
+        name = r["name"]
+        iata = r["iata_code"]
+        # Search string: city first so city-name queries score highest
+        muni_extra = f" {muni}" if muni and muni.lower() not in name.lower() else ""
+        results_search.append(f"{name}{muni_extra} {iata}")
+        # Display label: include municipality when it adds useful context
+        if muni and muni.lower() not in name.lower():
+            label = f"{name} ({iata}) — {muni}"
+        else:
+            label = f"{name} ({iata})"
+        results_info.append({"label": label, "iata": iata, "lat": r["lat"], "lon": r["lon"]})
+    return results_search, results_info
 
 
 # ---------------------------------------------------------------------------
@@ -94,16 +109,13 @@ def _node_from_iata(iata: str) -> dict:
 
 
 def _fuzzy_candidates(query: str, limit: int = 6) -> list[dict]:
-    matches = rf_process.extract(query, _fuzzy_corpus(), scorer=fuzz.WRatio, limit=limit)
+    search_strings, info = _fuzzy_data()
+    matches = rf_process.extract(query, search_strings, scorer=fuzz.WRatio, limit=limit)
     results = []
-    iata_map = _iata_map()
-    for label, score, _ in matches:
+    for _s, score, idx in matches:
         if score < 45:
             continue
-        iata = label.split("(")[-1].rstrip(")")
-        if iata in iata_map:
-            r = iata_map[iata]
-            results.append({"label": label, "iata": iata, "lat": r["lat"], "lon": r["lon"], "score": score})
+        results.append({**info[idx], "score": score})
     return results
 
 
@@ -155,7 +167,7 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0}
+    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_focus_nodes": None}
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -234,6 +246,25 @@ def _norm_lon(origin_lon, dest_lon):
     return dest_lon
 
 
+_PARALLEL_OFFSET_DEG = 0.05  # ~5 km separation for overlapping ground-mode lines
+
+
+def _perpendicular_offset(a: dict, b_lon: float, b_lat: float, idx: int, n: int) -> tuple:
+    """Return (olat, olon, dlat, dlon) shifted perpendicular to the segment."""
+    dlat = b_lat - a["lat"]
+    dlon = b_lon - a["lon"]
+    length = math.sqrt(dlat ** 2 + dlon ** 2) or 1
+    perp_lat = -dlon / length
+    perp_lon = dlat / length
+    shift = (idx - (n - 1) / 2.0) * _PARALLEL_OFFSET_DEG
+    return (
+        a["lat"] + perp_lat * shift,
+        a["lon"] + perp_lon * shift,
+        b_lat + perp_lat * shift,
+        b_lon + perp_lon * shift,
+    )
+
+
 def _build_render_data(routes):
     # Count trips per normalised pair+mode
     pair_counts: dict[tuple, int] = {}
@@ -254,6 +285,14 @@ def _build_render_data(routes):
             pair_meta[key] = (a, b)
             total_km += _haversine(a["lat"], a["lon"], b["lat"], b["lon"])
 
+    # For each undirected geo-pair, collect ground modes in a stable order
+    geo_pair_ground_keys: dict[tuple, list[tuple]] = {}
+    for key in pair_counts:
+        ak, bk, mode = key
+        if mode in GROUND_MODES:
+            gk = (ak, bk)
+            geo_pair_ground_keys.setdefault(gk, []).append(key)
+
     # Collect endpoint keys for node sizing
     endpoint_keys: set[str] = set()
     for entry in routes:
@@ -268,14 +307,25 @@ def _build_render_data(routes):
     arc_rows, line_rows, node_dict = [], [], {}
 
     for key, count in pair_counts.items():
-        _, _, mode = key
+        ak, bk, mode = key
         a, b = pair_meta[key]
         colour = MODE_COLOUR[mode]
+
+        norm_dest_lon = _norm_lon(a["lon"], b["lon"])
+        olat, olon, dlat, dlon = a["lat"], a["lon"], b["lat"], norm_dest_lon
+
+        if mode in GROUND_MODES:
+            gk = (ak, bk)
+            siblings = geo_pair_ground_keys.get(gk, [key])
+            if len(siblings) > 1:
+                idx = siblings.index(key)
+                olat, olon, dlat, dlon = _perpendicular_offset(a, norm_dest_lon, b["lat"], idx, len(siblings))
+
         row = {
-            "origin_lat": a["lat"],
-            "origin_lon": a["lon"],
-            "dest_lat": b["lat"],
-            "dest_lon": _norm_lon(a["lon"], b["lon"]),
+            "origin_lat": olat,
+            "origin_lon": olon,
+            "dest_lat": dlat,
+            "dest_lon": dlon,
             "colour": colour,
             "width": _trip_width(count),
             "label": f"{a['label']} → {b['label']}",
@@ -334,20 +384,20 @@ with st.sidebar:
     with st.form("route_form", clear_on_submit=True):
         route_text = st.text_input(
             "Route",
-            placeholder="FRA-CDG  or  Paris to London",
+            placeholder="BCN-FRA  or  London to Paris",
             help="Separate stops with  -  or  'to'. Use 'City, Country' for ambiguous places.",
         )
         add_clicked = st.form_submit_button("Add route", type="primary", use_container_width=True)
 
     st.text_input(
         "Tag (optional)",
-        placeholder="Summer 2025",
+        placeholder="Summer 2026",
         help="Stays set as you add multiple stops — useful for grouping a whole trip.",
         key="persistent_tag",
     )
     st.text_input(
         "Date (optional)",
-        placeholder="2025-07-14",
+        placeholder="2026-06-21",
         help="Specific date for this route — clears after each addition.",
         key=f"route_date_{st.session_state._date_clear}",
     )
@@ -380,13 +430,15 @@ with st.sidebar:
                     all_auto = False
 
             if all_auto:
+                new_nodes = [r["resolved"] for r in resolutions]
                 st.session_state.routes.append({
                     "legs": tokens,
                     "mode": mode,
                     "tag": tag_text.strip(),
                     "date": date_text.strip(),
-                    "nodes": [r["resolved"] for r in resolutions],
+                    "nodes": new_nodes,
                 })
+                st.session_state._focus_nodes = new_nodes
                 st.session_state.pending = None
                 st.session_state._date_clear += 1
                 _sync_url()
@@ -423,13 +475,15 @@ with st.sidebar:
         p["resolutions"] = updated
 
         if all_ok and st.button("✓ Confirm & add", type="primary", use_container_width=True):
+            confirmed_nodes = [r["resolved"] for r in updated]
             st.session_state.routes.append({
                 "legs": p["tokens"],
                 "mode": p["mode"],
                 "tag": p.get("tag", ""),
                 "date": p.get("date", ""),
-                "nodes": [r["resolved"] for r in updated],
+                "nodes": confirmed_nodes,
             })
+            st.session_state._focus_nodes = confirmed_nodes
             st.session_state.pending = None
             st.session_state._date_clear += 1
             _sync_url()
@@ -522,10 +576,11 @@ if n_cities:
 parts.append(f"📏 {total_km:,.0f} km")
 st.markdown(f"### {('  ·  ').join(parts)}")
 
-# Map view centred on logged routes
-if node_rows:
-    lats = [n["lat"] for n in node_rows]
-    lons = [n["lon"] for n in node_rows]
+# Map view: centre on the most recently added route, fall back to all nodes
+focus = st.session_state.get("_focus_nodes") or node_rows
+if focus:
+    lats = [n["lat"] for n in focus if n]
+    lons = [n["lon"] for n in focus if n]
     clat = (max(lats) + min(lats)) / 2
     clon = (max(lons) + min(lons)) / 2
     span = max(max(lats) - min(lats), max(lons) - min(lons))
@@ -580,6 +635,7 @@ st.pydeck_chart(
         },
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     ),
+    key=f"map_{len(st.session_state.routes)}_{hash(tuple(n['label'] for r in st.session_state.routes for n in (r.get('nodes') or []) if n))}",
     height=680,
     width="stretch",
 )

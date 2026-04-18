@@ -16,66 +16,65 @@ st.set_page_config(
 )
 
 st.title("✈ PyFly")
-st.subheader("Interactive great circle route visualisation for the AENA Spanish airport network")
+st.subheader("Map your travels. Explore the world's flight network.")
 
 st.markdown("""
-PyFly maps every scheduled flight route in Spain's AENA network as a geodesic arc —
-origin to destination, coloured by direction, hoverable for airline detail.
-Built as a revival of a 2022 scraping project, modernised with a pluggable
-multi-source architecture and a live Streamlit interface.
+PyFly is a personal flight and travel tracker combined with a global route explorer.
+Log the routes you've flown, trained, sailed, or driven — then dive into scheduled
+and historical flight data from Spain's AENA network, the 2017 global baseline,
+or real-time OpenSky records.
 """)
 
 st.markdown("---")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### 🛫 AENA Live")
+    st.markdown("### 🧳 My Routes")
     st.markdown(
-        "Current scheduled routes scraped daily from **aena.es** using a headless "
-        "Chromium browser. Covers all 43 commercial airports in the AENA network. "
-        "Refreshed automatically via GitHub Actions."
+        "Log every route you've ever taken — flights, trains, boats, and car trips. "
+        "Each leg is mapped as a great circle arc or ground line, thickened by how "
+        "many times you've done it. Filter by mode, share via URL, or export as JSON."
     )
 
 with col2:
-    st.markdown("### 📅 Historical (2017)")
+    st.markdown("### 🗺 Route Explorer")
     st.markdown(
-        "Pre-COVID baseline from the **OpenFlights** open dataset (~2017 vintage). "
-        "Useful for spotting routes that existed before the pandemic and never "
-        "came back, or new routes that didn't exist then."
-    )
-
-with col3:
-    st.markdown("### 🔴 OpenSky")
-    st.markdown(
-        "Actual flights flown in the last 7 days from the **OpenSky Network** REST API. "
-        "Requires free API credentials. Results are cached per-airport for 24 hours "
-        "to stay within the free-tier rate limit."
+        "Browse global scheduled and historical flight routes. Explore the live AENA "
+        "Spanish network, the 2017 OpenFlights global baseline (3,400+ airports), or "
+        "actual flights from the OpenSky Network. Filter by country, airport, and airline."
     )
 
 st.markdown("---")
 
-st.markdown("### How it works")
+st.markdown("### Data sources")
 
-st.markdown("""
-**Scraper** (CLI / GitHub Actions cron)
-`python -m pyfly --source aena --scope aena`
-Playwright scrapes the AENA destinations page for each of the 43 airports,
-parses routes and airlines, enriches with coordinates from OurAirports,
-and writes a parquet snapshot committed back to the repo.
+c1, c2, c3 = st.columns(3)
 
-**App** (Streamlit — this page)
-Reads exclusively from DuckDB, which is hydrated from the committed parquet
-files on cold start. The app never triggers a scrape. Data age is shown
-next to the source selector so you always know how fresh the data is.
+with c1:
+    st.markdown("**🛫 AENA Live**")
+    st.markdown(
+        "Scheduled routes scraped monthly from **aena.es**. "
+        "Covers all 43 commercial airports in the AENA network. "
+        "Auto-updated via GitHub Actions."
+    )
 
-**Adding a new source**
-One new file implementing `FlightSource`, one line in `ingest.py`. Nothing else changes.
-""")
+with c2:
+    st.markdown("**📅 Historical (2017)**")
+    st.markdown(
+        "Pre-COVID baseline from the **OpenFlights** open dataset. "
+        "Available for Spain, Portugal, or the full global network "
+        "covering 3,400+ airports."
+    )
+
+with c3:
+    st.markdown("**🔴 OpenSky**")
+    st.markdown(
+        "Actual flights flown in the last 7 days via the **OpenSky Network** API. "
+        "Requires free credentials. Cached per-airport for 24 hours."
+    )
 
 st.markdown("---")
-
-st.markdown("### Network at a glance")
 
 try:
     from pyfly.db import init_db, read_routes
@@ -83,18 +82,16 @@ try:
     df = read_routes(source="aena")
     if not df.is_empty():
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Airports", df["origin_iata"].n_unique())
+        c1.metric("AENA Airports", df["origin_iata"].n_unique())
         c2.metric("Routes", len(df))
         c3.metric("Destinations", df["dest_iata"].n_unique())
         c4.metric("Airlines", df["airline_iata"].n_unique())
-    else:
-        st.info("No AENA data loaded yet. Run the ingestion pipeline to populate.")
 except Exception:
-    st.info("Run `uv run python -m pyfly --source aena --scope aena` to load data.")
+    pass
 
 st.markdown("---")
 
-st.info("👈 Open **Route Map** from the sidebar to explore the network.")
+st.info("👈 Open **My Routes** from the sidebar to start logging your travels, or **Route Explorer** to browse the global network.")
 
 st.markdown(
     "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports</sub>",
