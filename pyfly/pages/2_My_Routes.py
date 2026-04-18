@@ -1,6 +1,7 @@
 """My Routes — personal travel history map."""
 import sys
 import json
+import gzip
 import base64
 import math
 from pathlib import Path
@@ -31,6 +32,7 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 MODES = {"✈ Plane": "plane", "🚂 Train": "train", "⛴ Boat": "boat", "🚗 Car": "car"}
 MODE_ICONS = {"plane": "✈", "train": "🚂", "boat": "⛴", "car": "🚗"}
+MODE_TRIP_LABEL = {"plane": ("flight", "flights"), "train": ("train", "trains"), "boat": ("voyage", "voyages"), "car": ("ride", "rides")}
 
 MODE_COLOUR = {
     "plane": [245, 158, 11, 200],
@@ -43,7 +45,13 @@ GROUND_MODES = {"train", "boat", "car"}
 
 
 def _trip_width(n: int) -> float:
-    return {1: 2.0, 2: 3.5, 3: 5.0}.get(n, 7.0)
+    if n == 1: return 2.0
+    if n == 2: return 3.0
+    if n == 3: return 4.5
+    if n == 4: return 6.0
+    if n == 5: return 7.5
+    if n <= 8:  return 9.0
+    return 12.0
 
 
 # ---------------------------------------------------------------------------
@@ -160,17 +168,45 @@ def _load_url_once():
     r = st.query_params.get("r")
     if r:
         try:
-            st.session_state.routes = json.loads(base64.urlsafe_b64decode(r.encode()).decode())
+            raw = base64.urlsafe_b64decode(r.encode())
+            data = json.loads(gzip.decompress(raw).decode())
+            st.session_state.routes = [_expand(e) for e in data]
         except Exception:
             pass
 
 
+def _slim(entry: dict) -> dict:
+    """Strip node data down to just what's needed for storage."""
+    return {
+        "legs": entry["legs"],
+        "mode": entry["mode"],
+        "date": entry.get("date", ""),
+        "nodes": [
+            {"iata": n["iata"]} if n.get("iata")
+            else {"label": n["label"], "lat": n["lat"], "lon": n["lon"]}
+            for n in (entry.get("nodes") or []) if n
+        ],
+    }
+
+
+def _expand(entry: dict) -> dict:
+    """Re-hydrate slim node entries from airports.csv."""
+    iata_map = _iata_map()
+    nodes = []
+    for n in entry.get("nodes") or []:
+        if n.get("iata") and n["iata"] in iata_map:
+            r = iata_map[n["iata"]]
+            nodes.append({"label": f"{r['name']} ({n['iata']})", "iata": n["iata"], "lat": r["lat"], "lon": r["lon"]})
+        else:
+            nodes.append(n)
+    return {**entry, "nodes": nodes}
+
+
 def _sync_url():
     if st.session_state.routes:
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(st.session_state.routes).encode()
-        ).decode()
-        st.query_params["r"] = encoded
+        slim = [_slim(r) for r in st.session_state.routes]
+        compressed = gzip.compress(json.dumps(slim, separators=(",", ":")).encode())
+        st.query_params["r"] = base64.urlsafe_b64encode(compressed).decode()
     else:
         st.query_params.clear()
 
@@ -254,8 +290,8 @@ def _build_render_data(routes):
                     "lat": node["lat"],
                     "lon": node["lon"],
                     "label": node["label"],
-                    "radius": 35000 if is_endpoint else 18000,
-                    "opacity": 210 if is_endpoint else 110,
+                    "radius": 8000 if is_endpoint else 4000,
+                    "opacity": 210 if is_endpoint else 120,
                 }
 
     return arc_rows, line_rows, list(node_dict.values()), total_km
@@ -263,19 +299,21 @@ def _build_render_data(routes):
 
 def _stats(routes):
     counts = {m: 0 for m in MODES.values()}
-    airports, countries = set(), set()
+    airports, cities, countries = set(), set(), set()
     iata_map = _iata_map()
     for entry in routes:
         counts[entry["mode"]] += 1
         for node in entry.get("nodes") or []:
             if not node:
                 continue
-            nk = node.get("iata") or node["label"]
-            airports.add(nk)
-            iso = iata_map.get(node.get("iata", ""), {}).get("iso_country")
-            if iso:
-                countries.add(iso)
-    return counts, len(airports), len(countries)
+            if node.get("iata"):
+                airports.add(node["iata"])
+                iso = iata_map.get(node["iata"], {}).get("iso_country")
+                if iso:
+                    countries.add(iso)
+            else:
+                cities.add(node["label"])
+    return counts, len(airports), len(cities), len(countries)
 
 
 # ---------------------------------------------------------------------------
@@ -285,22 +323,40 @@ def _stats(routes):
 _init_state()
 _load_url_once()
 
+# mode_label persists across reruns via Streamlit's widget state
+if "mode_label" not in st.session_state:
+    st.session_state.mode_label = list(MODES)[0]
+
 with st.sidebar:
     st.subheader("Log a route")
 
-    route_text = st.text_input(
-        "Route",
-        placeholder="BCN-FRA or Barcelona-Frankfurt",
-        help="Airport codes or city names, separated by  -",
-    )
-    mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
-    mode = MODES[mode_label]
-    date_text = st.text_input("Date (optional)", placeholder="Summer 2019")
+    with st.form("route_form", clear_on_submit=True):
+        route_text = st.text_input(
+            "Route",
+            placeholder="BCN - FRA  or  Kuala Lumpur - Butterworth, Malaysia",
+            help="Separate stops with  -  (spaces around the dash). Use 'City, Country' for ambiguous places.",
+        )
+        mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
+        add_clicked = st.form_submit_button("Add route", type="primary", use_container_width=True)
 
-    add_clicked = st.button("Add route", type="primary", use_container_width=True)
+    st.text_input(
+        "Tag (optional)",
+        placeholder="Summer 2025",
+        help="Label for this route or group of routes — stays set as you add multiple stops.",
+        key="persistent_tag",
+    )
+    tag_text = st.session_state.get("persistent_tag", "")
+
+    mode = MODES[mode_label]
 
     if add_clicked and route_text.strip():
-        tokens = [t.strip() for t in route_text.replace(" ", "").split("-") if t.strip()]
+        # Split on " - " first (allows dashes in place names like Bora-Bora).
+        # Fall back to "-" only when no spaced delimiter found (pure IATA: BCN-FRA-SIN).
+        raw = route_text.strip()
+        if " - " in raw:
+            tokens = [t.strip() for t in raw.split(" - ") if t.strip()]
+        else:
+            tokens = [t.strip() for t in raw.split("-") if t.strip()]
         if len(tokens) < 2:
             st.error("Enter at least two stops, e.g. BCN-FRA")
         else:
@@ -316,7 +372,7 @@ with st.sidebar:
                 st.session_state.routes.append({
                     "legs": tokens,
                     "mode": mode,
-                    "date": date_text.strip(),
+                    "date": tag_text.strip(),
                     "nodes": [r["resolved"] for r in resolutions],
                 })
                 st.session_state.pending = None
@@ -326,7 +382,7 @@ with st.sidebar:
                 st.session_state.pending = {
                     "resolutions": resolutions,
                     "mode": mode,
-                    "date": date_text.strip(),
+                    "date": tag_text.strip(),
                     "tokens": tokens,
                 }
 
@@ -380,6 +436,12 @@ with st.sidebar:
                     _sync_url()
                     st.rerun()
 
+        if st.button("🗑 Delete all routes", use_container_width=True):
+            st.session_state.routes = []
+            st.session_state.pending = None
+            _sync_url()
+            st.rerun()
+
         st.markdown("---")
         st.subheader("Share")
 
@@ -416,18 +478,21 @@ if not st.session_state.routes:
     st.stop()
 
 arc_rows, line_rows, node_rows, total_km = _build_render_data(st.session_state.routes)
-counts, n_airports, n_countries = _stats(st.session_state.routes)
+counts, n_airports, n_cities, n_countries = _stats(st.session_state.routes)
 
 # Stats bar
 parts = [
-    f"{MODE_ICONS[m]} {c} {m}{'s' if c > 1 else ''}"
+    f"{MODE_ICONS[m]} {c} {MODE_TRIP_LABEL[m][1 if c > 1 else 0]}"
     for m, c in counts.items() if c
 ] + [
     f"🌍 {n_countries} countr{'ies' if n_countries != 1 else 'y'}",
-    f"🛬 {n_airports} airports",
-    f"📏 {total_km:,.0f} km",
 ]
-st.markdown("  ·  ".join(parts))
+if n_airports:
+    parts.append(f"🛬 {n_airports} airport{'s' if n_airports != 1 else ''}")
+if n_cities:
+    parts.append(f"🏙 {n_cities} {'cities' if n_cities != 1 else 'city'}")
+parts.append(f"📏 {total_km:,.0f} km")
+st.markdown(f"### {('  ·  ').join(parts)}")
 
 # Map view centred on logged routes
 if node_rows:
