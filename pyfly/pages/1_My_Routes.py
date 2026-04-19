@@ -80,7 +80,7 @@ def _airport_df() -> pl.DataFrame:
         pl.col("iata_code").is_not_null() & (pl.col("iata_code") != "")
     )
     cols = ["iata_code", "name", "latitude_deg", "longitude_deg", "iso_country"]
-    for extra in ("municipality", "type"):
+    for extra in ("municipality", "type", "iso_region"):
         if extra in df.columns:
             cols.append(extra)
     return df.select(cols).rename({"latitude_deg": "lat", "longitude_deg": "lon"})
@@ -221,6 +221,110 @@ def _road_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> list[l
         return None
 
 
+# ---------------------------------------------------------------------------
+# Region coloring
+# ---------------------------------------------------------------------------
+
+_GEO_URLS = {
+    "Country": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
+    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson",
+}
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+@st.cache_resource(show_spinner="Loading map data…")
+def _fetch_geojson(url: str) -> dict:
+    resp = httpx.get(url, timeout=60)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _pip_rings(px: float, py: float, rings: list) -> bool:
+    inside = False
+    for ring in rings:
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i][0], ring[i][1]
+            xj, yj = ring[j][0], ring[j][1]
+            if ((yi > py) != (yj > py)) and px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+    return inside
+
+
+def _pip_feature(lon: float, lat: float, feature: dict) -> bool:
+    geom = feature.get("geometry") or {}
+    gtype, coords = geom.get("type"), geom.get("coordinates", [])
+    if gtype == "Polygon":
+        return _pip_rings(lon, lat, coords)
+    if gtype == "MultiPolygon":
+        return any(_pip_rings(lon, lat, rings) for rings in coords)
+    return False
+
+
+def _collect_visited_iso(routes, geojson: dict, level: str) -> set[str]:
+    """Return OurAirports-format ISO codes for all visited nodes (e.g. 'ES', 'ES-CT')."""
+    iata_data = _iata_map()
+    visited: set[str] = set()
+    geocoded: list[dict] = []
+
+    for entry in routes:
+        for node in (entry.get("nodes") or []):
+            if not node:
+                continue
+            iata = node.get("iata")
+            if iata and iata in iata_data:
+                r = iata_data[iata]
+                iso = r.get("iso_country") if level == "Country" else r.get("iso_region")
+                if iso:
+                    visited.add(iso)
+            elif node.get("lat") is not None:
+                geocoded.append(node)
+
+    for node in geocoded:
+        for f in geojson.get("features", []):
+            if _pip_feature(node["lon"], node["lat"], f):
+                props = f.get("properties") or {}
+                if level == "Country":
+                    iso = props.get("ISO_A2")
+                else:
+                    iso = props.get("iso_3166_2") or props.get("code_hasc", "").replace(".", "-", 1) or None
+                if iso:
+                    visited.add(iso)
+                break
+
+    return visited
+
+
+def _filter_geojson(geojson: dict, visited: set[str], level: str) -> dict:
+    if level == "Country":
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                f for f in geojson["features"]
+                if (f.get("properties") or {}).get("ISO_A2") in visited
+            ],
+        }
+    # Region: Natural Earth iso_3166_2 is sparsely populated; also try code_hasc
+    # OurAirports uses "ES-CT", Natural Earth code_hasc uses "ES.CT"
+    visited_hasc = {v.replace("-", ".", 1) for v in visited}
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            f for f in geojson["features"]
+            if (
+                (f.get("properties") or {}).get("iso_3166_2") in visited
+                or (f.get("properties") or {}).get("code_hasc") in visited_hasc
+            )
+        ],
+    }
+
+
 def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
     """Return (auto_resolved_node, candidates_if_ambiguous)."""
     upper = token.strip().upper()
@@ -292,17 +396,20 @@ def _load_url_once():
 
 def _slim(entry: dict) -> dict:
     """Strip node data down to just what's needed for storage."""
-    return {
+    d: dict = {
         "legs": entry["legs"],
         "mode": entry["mode"],
-        "tag": entry.get("tag", ""),
-        "date": entry.get("date", ""),
         "nodes": [
             {"iata": n["iata"]} if n.get("iata")
-            else {"label": n["label"], "lat": n["lat"], "lon": n["lon"]}
+            else {"label": n["label"], "lat": round(n["lat"], 4), "lon": round(n["lon"], 4)}
             for n in (entry.get("nodes") or []) if n
         ],
     }
+    if entry.get("tag"):
+        d["tag"] = entry["tag"]
+    if entry.get("date"):
+        d["date"] = entry["date"]
+    return d
 
 
 def _expand(entry: dict) -> dict:
@@ -315,7 +422,7 @@ def _expand(entry: dict) -> dict:
             nodes.append({"label": f"{r['name']} ({n['iata']})", "iata": n["iata"], "lat": r["lat"], "lon": r["lon"]})
         else:
             nodes.append(n)
-    return {**entry, "nodes": nodes}
+    return {**entry, "nodes": nodes, "tag": entry.get("tag", ""), "date": entry.get("date", "")}
 
 
 def _sync_url():
@@ -499,6 +606,17 @@ _init_state()
 _load_url_once()
 
 with st.sidebar:
+    st.subheader("Region coloring")
+    region_enabled = st.toggle("Color visited regions", value=False, key="region_enabled")
+    if region_enabled:
+        st.selectbox("Scale", list(_GEO_URLS.keys()), key="region_level")
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            st.color_picker("Colour", value="#3B82F6", key="region_color")
+        with col_b:
+            st.slider("Opacity", 5, 80, 35, key="region_opacity")
+
+    st.markdown("---")
     st.subheader("Log a route")
 
     mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
@@ -578,27 +696,27 @@ with st.sidebar:
     if st.session_state.pending:
         p = st.session_state.pending
         st.markdown("**Confirm stops:**")
-        updated, all_ok = [], True
+        all_ok = True
+        selectbox_choices: dict[str, dict] = {}
 
         for res in p["resolutions"]:
             if res["resolved"]:
                 st.caption(f"✓ {res['token']} → {res['resolved']['label']}")
-                updated.append(res)
             elif res["candidates"]:
                 labels = [c["label"] for c in res["candidates"]]
                 chosen_label = st.selectbox(f"Which '{res['token']}'?", labels, key=f"dis_{res['token']}")
                 chosen = next(c for c in res["candidates"] if c["label"] == chosen_label)
-                updated.append({**res, "resolved": chosen})
+                selectbox_choices[res["token"]] = chosen
             else:
                 search_url = f"https://www.google.com/search?q={res['token'].replace(' ', '+')}+airport+IATA+code"
                 st.error(f"Could not resolve **{res['token']}**. Try the IATA code — [look it up]({search_url}).")
                 all_ok = False
-                updated.append(res)
-
-        p["resolutions"] = updated
 
         if all_ok and st.button("✓ Confirm & add", type="primary", use_container_width=True):
-            confirmed_nodes = [r["resolved"] for r in updated]
+            confirmed_nodes = [
+                res["resolved"] if res["resolved"] else selectbox_choices[res["token"]]
+                for res in p["resolutions"]
+            ]
             st.session_state.routes.append({
                 "legs": p["tokens"],
                 "mode": p["mode"],
@@ -674,6 +792,7 @@ with st.sidebar:
         st.caption("No routes logged yet.")
 
 
+
 # ---------------------------------------------------------------------------
 # Main panel
 # ---------------------------------------------------------------------------
@@ -716,6 +835,31 @@ else:
     clat, clon, zoom = 30.0, 0.0, 2
 
 layers = []
+
+region_enabled = st.session_state.get("region_enabled", False)
+region_level = st.session_state.get("region_level", "Country")
+if region_enabled and st.session_state.routes:
+    try:
+        geo_url = _GEO_URLS[region_level]
+        geojson = _fetch_geojson(geo_url)
+        visited = _collect_visited_iso(st.session_state.routes, geojson, region_level)
+        filtered_geo = _filter_geojson(geojson, visited, region_level)
+        if filtered_geo["features"]:
+            r, g, b = _hex_to_rgb(st.session_state.get("region_color", "#3B82F6"))
+            opacity_pct = st.session_state.get("region_opacity", 35)
+            fill_a = int(opacity_pct * 255 / 100)
+            line_a = min(255, fill_a * 3)
+            layers.append(pdk.Layer(
+                "GeoJsonLayer",
+                data=filtered_geo,
+                get_fill_color=[r, g, b, fill_a],
+                get_line_color=[r, g, b, line_a],
+                get_line_width=1,
+                line_width_min_pixels=1,
+                pickable=False,
+            ))
+    except Exception:
+        pass
 
 if arc_rows:
     layers.append(pdk.Layer(
