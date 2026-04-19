@@ -227,7 +227,7 @@ def _road_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> list[l
 
 _GEO_URLS = {
     "Country": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
-    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson",
+    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson",
 }
 
 
@@ -605,18 +605,10 @@ def _stats(routes):
 _init_state()
 _load_url_once()
 
-with st.sidebar:
-    st.subheader("Region coloring")
-    region_enabled = st.toggle("Color visited regions", value=False, key="region_enabled")
-    if region_enabled:
-        st.selectbox("Scale", list(_GEO_URLS.keys()), key="region_level")
-        col_a, col_b = st.columns([1, 2])
-        with col_a:
-            st.color_picker("Colour", value="#3B82F6", key="region_color")
-        with col_b:
-            st.slider("Opacity", 5, 80, 35, key="region_opacity")
+_need_rerun = False
 
-    st.markdown("---")
+with st.sidebar:
+    # ── 1. Log a route ───────────────────────────────────────────────────────
     st.subheader("Log a route")
 
     mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
@@ -645,8 +637,6 @@ with st.sidebar:
     )
     tag_text = st.session_state.get("persistent_tag", "")
     date_text = st.session_state.get(f"route_date_{st.session_state._date_clear}", "")
-
-    mode = MODES[mode_label]
 
     if add_clicked and route_text.strip():
         raw = route_text.strip()
@@ -679,11 +669,10 @@ with st.sidebar:
                 st.session_state._focus_nodes = new_nodes
                 st.session_state.pending = None
                 st.session_state._date_clear += 1
-                st.session_state._route_clear += 1  # clears the input on success
+                st.session_state._route_clear += 1
                 _sync_url()
-                st.rerun()
+                _need_rerun = True
             else:
-                # Leave the route text intact so the user can fix it
                 st.session_state.pending = {
                     "resolutions": resolutions,
                     "mode": mode,
@@ -729,16 +718,30 @@ with st.sidebar:
             st.session_state._date_clear += 1
             st.session_state._route_clear += 1
             _sync_url()
-            st.rerun()
+            _need_rerun = True
 
     st.markdown("---")
 
+    # ── 2. Region coloring ───────────────────────────────────────────────────
+    st.subheader("Region coloring")
+    region_enabled = st.toggle("Color visited regions", value=False, key="region_enabled")
+    if region_enabled:
+        st.selectbox("Scale", list(_GEO_URLS.keys()), key="region_level")
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            st.color_picker("Colour", value="#3B82F6", key="region_color")
+        with col_b:
+            st.slider("Opacity", 5, 80, 35, key="region_opacity")
+
+    st.markdown("---")
+
+    # ── 3. My routes ─────────────────────────────────────────────────────────
     if st.session_state.routes:
         if st.button("🗑 Delete all routes", use_container_width=True):
             st.session_state.routes = []
             st.session_state.pending = None
             _sync_url()
-            st.rerun()
+            _need_rerun = True
 
         st.subheader("Your routes")
         routes_display = list(enumerate(st.session_state.routes))[::-1]
@@ -755,9 +758,14 @@ with st.sidebar:
                 if st.button("🗑", key=f"del_{i}", help="Remove this route"):
                     st.session_state.routes.pop(i)
                     _sync_url()
-                    st.rerun()
+                    _need_rerun = True
+    else:
+        st.caption("No routes logged yet.")
 
-        st.markdown("---")
+    st.markdown("---")
+
+    # ── 4. Share ──────────────────────────────────────────────────────────────
+    if st.session_state.routes:
         st.subheader("Share")
 
         url_val = f"https://pyfly-routes.streamlit.app/My_Routes?r={st.query_params.get('r', '')}"
@@ -785,11 +793,13 @@ with st.sidebar:
                     else:
                         st.session_state.routes = data
                         _sync_url()
-                        st.rerun()
+                        _need_rerun = True
                 except Exception:
                     st.error("Invalid JSON file.")
-    else:
-        st.caption("No routes logged yet.")
+
+# Defer rerun until after the full sidebar has rendered so no widget state is lost
+if _need_rerun:
+    st.rerun()
 
 
 
