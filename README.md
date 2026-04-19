@@ -178,3 +178,23 @@ Nothing else changes.
 ---
 
 *Data sources: [aena.es](https://www.aena.es) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
+
+---
+
+## Licences and attribution
+
+| Source | Licence | Notes |
+|---|---|---|
+| [OpenFlights](https://openflights.org/data.html) routes & airlines | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/) | Attribution required; derivative databases must be shared under the same licence |
+| [OurAirports](https://ourairports.com/data/) airport data | Public domain | No restrictions |
+| [Natural Earth](https://www.naturalearthdata.com/) region boundaries | Public domain | No restrictions |
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) (road routing via OSRM, geocoding via Nominatim) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/) | Must display "© OpenStreetMap contributors" |
+| [CARTO](https://carto.com/legal/) Dark Matter basemap tiles | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | Must display "© CARTO" alongside OpenStreetMap attribution |
+| [OpenSky Network](https://opensky-network.org/about/terms-of-use) | Non-commercial research | Free-tier API use only; commercial use requires a separate agreement |
+| [AENA](https://www.aena.es) route schedules | Scraped from public pages | Factual timetable data; not redistributed — only aggregated route pairs are stored |
+
+This project is intended for **personal and educational use**. The committed AENA parquet snapshot contains only origin–destination pairs derived from publicly accessible schedule pages, not raw page content.
+
+### Copyright
+
+© 2025 Barren-d ([github.com/Barren-d](https://github.com/Barren-d)). Source code is publicly available for personal and educational use. Commercial use requires explicit written permission — see [LICENSE](LICENSE).

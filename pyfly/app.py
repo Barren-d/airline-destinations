@@ -94,6 +94,8 @@ st.markdown("---")
 st.info("👈 Open **My Routes** from the sidebar to start logging your travels, or **Route Explorer** to browse the global network.")
 
 st.markdown(
-    "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports</sub>",
+    "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports · © OpenStreetMap contributors · © CARTO</sub>"
+    "<br><sub>© 2025 Barren-d — personal and educational use only · "
+    "[Source](https://github.com/Barren-d/airline-destinations)</sub>",
     unsafe_allow_html=True,
 )
