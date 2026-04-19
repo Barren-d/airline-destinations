@@ -1,5 +1,6 @@
 """My Routes — personal travel history map."""
 import sys
+import re as _re
 import json
 import gzip
 import base64
@@ -58,15 +59,29 @@ def _trip_width(n: int) -> float:
 # Airport data
 # ---------------------------------------------------------------------------
 
+_TYPE_PENALTY = {
+    "large_airport": 0,
+    "medium_airport": 0,
+    "small_airport": -10,
+    "heliport": -30,
+    "seaplane_base": -25,
+    "balloonport": -30,
+    "closed": -50,
+}
+
+
 @st.cache_data
 def _airport_df() -> pl.DataFrame:
     path = DATA_DIR / "airports.csv"
     if not path.exists():
         return pl.DataFrame()
-    df = pl.read_csv(path).filter(pl.col("iata_code").is_not_null() & (pl.col("iata_code") != ""))
+    df = pl.read_csv(path, ignore_errors=True).filter(
+        pl.col("iata_code").is_not_null() & (pl.col("iata_code") != "")
+    )
     cols = ["iata_code", "name", "latitude_deg", "longitude_deg", "iso_country"]
-    if "municipality" in df.columns:
-        cols.append("municipality")
+    for extra in ("municipality", "type"):
+        if extra in df.columns:
+            cols.append(extra)
     return df.select(cols).rename({"latitude_deg": "lat", "longitude_deg": "lon"})
 
 
@@ -75,28 +90,37 @@ def _iata_map() -> dict:
     return {r["iata_code"]: r for r in _airport_df().iter_rows(named=True)}
 
 
-@st.cache_data
-def _fuzzy_data() -> tuple[list[str], list[dict]]:
-    """Returns (search_strings, info_dicts) — parallel lists for fuzzy matching.
 
-    Search strings include municipality so "Cartagena" matches CTG even though
-    the airport name is "Rafael Núñez International Airport".
+
+@st.cache_data
+def _fuzzy_data() -> tuple[list[str], list[str], list[dict]]:
+    """Returns (name_corpus, muni_corpus, info_dicts) — parallel lists.
+
+    Dual-corpus approach: score the query against airport names AND municipality
+    separately, then take the best. This handles airports named after people
+    (MNL=Ninoy Aquino, HAN=Noi Bai) where the city name only appears in
+    municipality — and strips parenthetical qualifiers like "Hanoi (Soc Son)".
     """
-    results_search, results_info = [], []
+    name_corpus, muni_corpus, info = [], [], []
     for r in _airport_df().iter_rows(named=True):
-        muni = (r.get("municipality") or "").strip()
+        muni_raw = (r.get("municipality") or "").strip()
+        muni_clean = _re.sub(r"\s*\(.*?\)", "", muni_raw).strip()
         name = r["name"]
         iata = r["iata_code"]
-        # Search string: city first so city-name queries score highest
-        muni_extra = f" {muni}" if muni and muni.lower() not in name.lower() else ""
-        results_search.append(f"{name}{muni_extra} {iata}")
-        # Display label: include municipality when it adds useful context
-        if muni and muni.lower() not in name.lower():
-            label = f"{name} ({iata}) — {muni}"
-        else:
-            label = f"{name} ({iata})"
-        results_info.append({"label": label, "iata": iata, "lat": r["lat"], "lon": r["lon"]})
-    return results_search, results_info
+        country = r["iso_country"]
+        airport_type = r.get("type") or "small_airport"
+
+        name_corpus.append(f"{name} {iata}")
+        muni_corpus.append(muni_clean)
+
+        label = f"{name} ({iata})"
+        if muni_clean and muni_clean.lower() not in name.lower():
+            label += f" — {muni_clean}, {country}"
+        info.append({
+            "label": label, "iata": iata, "lat": r["lat"], "lon": r["lon"],
+            "type": airport_type,
+        })
+    return name_corpus, muni_corpus, info
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +133,40 @@ def _node_from_iata(iata: str) -> dict:
 
 
 def _fuzzy_candidates(query: str, limit: int = 6) -> list[dict]:
-    search_strings, info = _fuzzy_data()
-    matches = rf_process.extract(query, search_strings, scorer=fuzz.WRatio, limit=limit)
+    name_corpus, muni_corpus, info = _fuzzy_data()
+
+    name_scores = {idx: s for _, s, idx in rf_process.extract(query, name_corpus, scorer=fuzz.WRatio, limit=100)}
+    muni_scores = {idx: s for _, s, idx in rf_process.extract(query, muni_corpus, scorer=fuzz.token_set_ratio, limit=200)}
+
+    combined: dict[int, int] = {}
+    for idx in set(name_scores) | set(muni_scores):
+        raw = max(name_scores.get(idx, 0), muni_scores.get(idx, 0))
+        penalty = _TYPE_PENALTY.get(info[idx]["type"], -15)
+        combined[idx] = raw + penalty
+
+    top = sorted(combined.items(), key=lambda x: -x[1])[:limit]
+    return [
+        {**info[idx], "score": score}
+        for idx, score in top
+        if score >= 40
+    ]
+
+
+def _nearest_airports(lat: float, lon: float, limit: int = 5, max_km: float = 150.0) -> list[dict]:
+    """Return up to `limit` airports within `max_km` of the given coordinates."""
+    R = 6371.0
+    _, _, info = _fuzzy_data()
     results = []
-    for _s, score, idx in matches:
-        if score < 45:
-            continue
-        results.append({**info[idx], "score": score})
-    return results
+    for a in info:
+        dlat = math.radians(a["lat"] - lat)
+        dlon = math.radians(a["lon"] - lon)
+        p1, p2 = math.radians(lat), math.radians(a["lat"])
+        hav = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
+        km = R * 2 * math.atan2(math.sqrt(hav), math.sqrt(1 - hav))
+        if km <= max_km:
+            results.append((km, a))
+    results.sort(key=lambda x: x[0])
+    return [{**a, "score": 72} for _, a in results[:limit]]
 
 
 def _geocode(query: str) -> dict | None:
@@ -151,10 +201,28 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 
     if mode == "plane":
         candidates = _fuzzy_candidates(token)
+        top_score = candidates[0]["score"] if candidates else 0
+        runner_up = candidates[1]["score"] if len(candidates) > 1 else 0
+
+        # Auto-resolve only when there is a clear, unambiguous winner
+        if top_score >= 90 and (top_score - runner_up) >= 8:
+            return candidates[0], []
+
+        # Low-confidence fuzzy: geocode the token and merge nearest airports.
+        # This handles historical city names (Saigon), transliterations (Hanoi),
+        # and any city whose name doesn't appear in the airport name/municipality.
+        if top_score < 65:
+            geo = _geocode(token)
+            if geo:
+                near = _nearest_airports(geo["lat"], geo["lon"])
+                seen_iata = {c["iata"] for c in candidates}
+                for a in near:
+                    if a["iata"] not in seen_iata:
+                        candidates.append(a)
+                        seen_iata.add(a["iata"])
+
         if not candidates:
             return None, []
-        if len(candidates) == 1 or candidates[0]["score"] >= 88:
-            return candidates[0], []
         return None, candidates
 
     # Ground / sea — geocode
@@ -167,7 +235,7 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_focus_nodes": None}
+    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None}
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -381,11 +449,12 @@ with st.sidebar:
     mode_label = st.radio("Mode", list(MODES), horizontal=True, label_visibility="collapsed")
     mode = MODES[mode_label]
 
-    with st.form("route_form", clear_on_submit=True):
+    with st.form("route_form", clear_on_submit=False):
         route_text = st.text_input(
             "Route",
             placeholder="BCN-FRA  or  London to Paris",
             help="Separate stops with  -  or  'to'. Use 'City, Country' for ambiguous places.",
+            key=f"route_input_{st.session_state._route_clear}",
         )
         add_clicked = st.form_submit_button("Add route", type="primary", use_container_width=True)
 
@@ -407,17 +476,13 @@ with st.sidebar:
     mode = MODES[mode_label]
 
     if add_clicked and route_text.strip():
-        import re as _re
         raw = route_text.strip()
-        # Replace "to" keyword with a safe internal separator
         normalised = _re.sub(r"\s+to\s+", " | ", raw, flags=_re.IGNORECASE)
         if " - " in normalised or " | " in normalised:
-            # Spaced delimiters present — split on those only, leaving unspaced
-            # dashes intact so place names like Bora-Bora are preserved.
             tokens = [t.strip() for t in _re.split(r" - | \| ", normalised) if t.strip()]
         else:
-            # No spaces around dashes — treat as pure IATA shorthand: BCN-FRA-SIN
             tokens = [t.strip() for t in normalised.split("-") if t.strip()]
+
         if len(tokens) < 2:
             st.error("Enter at least two stops, e.g. BCN-FRA")
         else:
@@ -441,9 +506,11 @@ with st.sidebar:
                 st.session_state._focus_nodes = new_nodes
                 st.session_state.pending = None
                 st.session_state._date_clear += 1
+                st.session_state._route_clear += 1  # clears the input on success
                 _sync_url()
                 st.rerun()
             else:
+                # Leave the route text intact so the user can fix it
                 st.session_state.pending = {
                     "resolutions": resolutions,
                     "mode": mode,
@@ -468,7 +535,8 @@ with st.sidebar:
                 chosen = next(c for c in res["candidates"] if c["label"] == chosen_label)
                 updated.append({**res, "resolved": chosen})
             else:
-                st.error(f"Could not resolve '{res['token']}'")
+                search_url = f"https://www.google.com/search?q={res['token'].replace(' ', '+')}+airport+IATA+code"
+                st.error(f"Could not resolve **{res['token']}**. Try the IATA code — [look it up]({search_url}).")
                 all_ok = False
                 updated.append(res)
 
@@ -486,6 +554,7 @@ with st.sidebar:
             st.session_state._focus_nodes = confirmed_nodes
             st.session_state.pending = None
             st.session_state._date_clear += 1
+            st.session_state._route_clear += 1
             _sync_url()
             st.rerun()
 
