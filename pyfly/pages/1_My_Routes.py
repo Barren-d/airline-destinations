@@ -11,6 +11,7 @@ _ROOT = Path(__file__).parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import httpx
 import polars as pl
 import pydeck as pdk
 import streamlit as st
@@ -144,9 +145,16 @@ def _fuzzy_candidates(query: str, limit: int = 6) -> list[dict]:
         penalty = _TYPE_PENALTY.get(info[idx]["type"], -15)
         combined[idx] = raw + penalty
 
-    top = sorted(combined.items(), key=lambda x: -x[1])[:limit]
+    # Sort by (adjusted_score DESC, name_score DESC) so that when two airports
+    # share the same city name, the one whose airport name contains the query
+    # (e.g. "Barcelona-El Prat" for BCN) ranks above a municipality-only match
+    # (e.g. BLA Venezuela whose name is "General Anzoategui...").
+    top = sorted(
+        combined.items(),
+        key=lambda x: (-x[1], -name_scores.get(x[0], 0)),
+    )[:limit]
     return [
-        {**info[idx], "score": score}
+        {**info[idx], "score": score, "name_score": name_scores.get(idx, 0)}
         for idx, score in top
         if score >= 40
     ]
@@ -191,6 +199,28 @@ def _geocode(query: str) -> dict | None:
     return None
 
 
+def _road_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> list[list[float]] | None:
+    """Return [[lon, lat], ...] road polyline from OSRM, or None on failure.
+
+    Uses the public OSRM API (OpenStreetMap data, no key required).
+    Results cached in session_state.road_cache to avoid repeat calls.
+    """
+    key = (round(lat1, 4), round(lon1, 4), round(lat2, 4), round(lon2, 4))
+    cache = st.session_state.road_cache
+    if key in cache:
+        return cache[key]
+    try:
+        url = f"https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+        resp = httpx.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=8)
+        resp.raise_for_status()
+        coords = resp.json()["routes"][0]["geometry"]["coordinates"]
+        cache[key] = coords
+        return coords
+    except Exception:
+        cache[key] = None
+        return None
+
+
 def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
     """Return (auto_resolved_node, candidates_if_ambiguous)."""
     upper = token.strip().upper()
@@ -203,9 +233,14 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
         candidates = _fuzzy_candidates(token)
         top_score = candidates[0]["score"] if candidates else 0
         runner_up = candidates[1]["score"] if len(candidates) > 1 else 0
+        top_name = candidates[0].get("name_score", 0)
+        runner_name = candidates[1].get("name_score", 0) if len(candidates) > 1 else 0
 
-        # Auto-resolve only when there is a clear, unambiguous winner
-        if top_score >= 90 and (top_score - runner_up) >= 8:
+        # Auto-resolve when there is a clear winner by adjusted score, OR when
+        # the adjusted scores are tied but one airport's name contains the query
+        # while the other's doesn't (e.g. "Barcelona" → BCN wins over BLA/VE).
+        name_gap = top_name - runner_name
+        if top_score >= 90 and ((top_score - runner_up) >= 8 or (top_score == runner_up and name_gap >= 30)):
             return candidates[0], []
 
         # Low-confidence fuzzy: geocode the token and merge nearest airports.
@@ -235,7 +270,7 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None}
+    defaults = {"routes": [], "geocode_cache": {}, "road_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None}
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -372,12 +407,37 @@ def _build_render_data(routes):
             if n1:
                 endpoint_keys.add(n1.get("iata") or n1["label"])
 
-    arc_rows, line_rows, node_dict = [], [], {}
+    arc_rows, line_rows, road_rows, node_dict = [], [], [], {}
 
     for key, count in pair_counts.items():
         ak, bk, mode = key
         a, b = pair_meta[key]
         colour = MODE_COLOUR[mode]
+        width = _trip_width(count)
+        label = f"{a['label']} → {b['label']}"
+
+        if mode == "car":
+            # Try to get road-following geometry from OSRM
+            geom = _road_geometry(a["lat"], a["lon"], b["lat"], b["lon"])
+            if geom:
+                road_rows.append({
+                    "path": geom,
+                    "colour": colour,
+                    "width": width,
+                    "label": label,
+                    "trips": count,
+                })
+                for node in (a, b):
+                    nk = node.get("iata") or node["label"]
+                    if nk not in node_dict:
+                        is_endpoint = nk in endpoint_keys
+                        node_dict[nk] = {
+                            "lat": node["lat"], "lon": node["lon"],
+                            "label": node["label"],
+                            "radius": 8000 if is_endpoint else 4000,
+                            "opacity": 210 if is_endpoint else 120,
+                        }
+                continue  # skip straight-line fallback
 
         norm_dest_lon = _norm_lon(a["lon"], b["lon"])
         olat, olon, dlat, dlon = a["lat"], a["lon"], b["lat"], norm_dest_lon
@@ -390,14 +450,10 @@ def _build_render_data(routes):
                 olat, olon, dlat, dlon = _perpendicular_offset(a, norm_dest_lon, b["lat"], idx, len(siblings))
 
         row = {
-            "origin_lat": olat,
-            "origin_lon": olon,
-            "dest_lat": dlat,
-            "dest_lon": dlon,
-            "colour": colour,
-            "width": _trip_width(count),
-            "label": f"{a['label']} → {b['label']}",
-            "trips": count,
+            "origin_lat": olat, "origin_lon": olon,
+            "dest_lat": dlat, "dest_lon": dlon,
+            "colour": colour, "width": width,
+            "label": label, "trips": count,
         }
         (line_rows if mode in GROUND_MODES else arc_rows).append(row)
 
@@ -406,14 +462,13 @@ def _build_render_data(routes):
             if nk not in node_dict:
                 is_endpoint = nk in endpoint_keys
                 node_dict[nk] = {
-                    "lat": node["lat"],
-                    "lon": node["lon"],
+                    "lat": node["lat"], "lon": node["lon"],
                     "label": node["label"],
                     "radius": 8000 if is_endpoint else 4000,
                     "opacity": 210 if is_endpoint else 120,
                 }
 
-    return arc_rows, line_rows, list(node_dict.values()), total_km
+    return arc_rows, line_rows, road_rows, list(node_dict.values()), total_km
 
 
 def _stats(routes):
@@ -628,7 +683,7 @@ if not st.session_state.routes:
     st.info("Log your first route in the sidebar — try **BCN-LHR-JFK** with mode ✈ Plane.")
     st.stop()
 
-arc_rows, line_rows, node_rows, total_km = _build_render_data(st.session_state.routes)
+arc_rows, line_rows, road_rows, node_rows, total_km = _build_render_data(st.session_state.routes)
 counts, n_airports, n_cities, n_countries = _stats(st.session_state.routes)
 
 # Stats bar
@@ -683,6 +738,19 @@ if line_rows:
         get_target_position=["dest_lon", "dest_lat"],
         get_color="colour",
         get_width="width",
+        pickable=True,
+        auto_highlight=True,
+    ))
+
+if road_rows:
+    layers.append(pdk.Layer(
+        "PathLayer",
+        data=road_rows,
+        get_path="path",
+        get_color="colour",
+        get_width="width",
+        width_units="pixels",
+        width_min_pixels=2,
         pickable=True,
         auto_highlight=True,
     ))
