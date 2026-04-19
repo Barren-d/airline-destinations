@@ -227,7 +227,7 @@ def _road_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> list[l
 
 _GEO_URLS = {
     "Country": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
-    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson",
+    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson",
 }
 
 
@@ -236,11 +236,24 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-@st.cache_resource(show_spinner="Loading map data…")
+@st.cache_resource(show_spinner="Loading region data…")
 def _fetch_geojson(url: str) -> dict:
-    resp = httpx.get(url, timeout=60)
+    resp = httpx.get(url, timeout=90)
     resp.raise_for_status()
-    return resp.json()
+    raw = resp.json()
+    # Keep only the properties we match against — reduces memory and speeds PiP
+    keep = {"ISO_A2", "iso_3166_2", "code_hasc"}
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": f["geometry"],
+                "properties": {k: v for k, v in (f.get("properties") or {}).items() if k in keep},
+            }
+            for f in raw.get("features", [])
+        ],
+    }
 
 
 def _pip_rings(px: float, py: float, rings: list) -> bool:
@@ -868,8 +881,8 @@ if region_enabled and st.session_state.routes:
                 line_width_min_pixels=1,
                 pickable=False,
             ))
-    except Exception:
-        pass
+    except Exception as _e:
+        st.warning(f"Region coloring unavailable: {_e}")
 
 if arc_rows:
     layers.append(pdk.Layer(
