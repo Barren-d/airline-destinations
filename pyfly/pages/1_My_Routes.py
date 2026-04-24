@@ -654,6 +654,7 @@ with st.sidebar:
     if add_clicked and route_text.strip():
         raw = route_text.strip()
         normalised = _re.sub(r"\s+to\s+", " | ", raw, flags=_re.IGNORECASE)
+        normalised = _re.sub(r"\s*–\s*", " | ", normalised)  # en dash
         if " - " in normalised or " | " in normalised:
             tokens = [t.strip() for t in _re.split(r" - | \| ", normalised) if t.strip()]
         else:
