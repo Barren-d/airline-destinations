@@ -5,6 +5,8 @@ import json
 import gzip
 import base64
 import math
+import time as _time
+from datetime import date as _date
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent.parent
@@ -338,6 +340,36 @@ def _filter_geojson(geojson: dict, visited: set[str], level: str) -> dict:
     }
 
 
+def _stop_title(node: dict) -> str:
+    iata = node.get("iata")
+    if iata:
+        r = _iata_map().get(iata, {})
+        return r.get("municipality") or r.get("name", iata)
+    return node.get("label", "")
+
+
+def _routes_to_stops(routes: list[dict]) -> list[dict]:
+    stops = []
+    for entry in routes:
+        mode = entry["mode"]
+        for node in (entry.get("nodes") or []):
+            if not node:
+                continue
+            slim = ({"iata": node["iata"]} if node.get("iata")
+                    else {"label": node["label"], "lat": round(node["lat"], 4), "lon": round(node["lon"], 4)})
+            stops.append({
+                "node": slim,
+                "title": _stop_title(node),
+                "transited": False,
+                "photos": [],
+                "sections": [],
+                "transit_out": {"mode": mode, "ref": "", "notes": ""},
+            })
+    if stops:
+        stops[-1]["transit_out"] = None
+    return stops
+
+
 def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
     """Return (auto_resolved_node, candidates_if_ambiguous)."""
     upper = token.strip().upper()
@@ -387,7 +419,11 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "road_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None}
+    defaults = {
+        "routes": [], "geocode_cache": {}, "road_cache": {}, "pending": None,
+        "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None,
+        "trip_selection_open": False, "trip_selected": set(), "trip_draft": None, "trips": [],
+    }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -947,3 +983,75 @@ st.pydeck_chart(
     height=680,
     width="stretch",
 )
+
+# ---------------------------------------------------------------------------
+# Convert to Trip
+# ---------------------------------------------------------------------------
+
+st.markdown("---")
+_btn_col, _ = st.columns([1, 3])
+with _btn_col:
+    _btn_label = "✕ Cancel" if st.session_state.trip_selection_open else "🗺 Convert to Trip →"
+    if st.button(_btn_label, use_container_width=True):
+        st.session_state.trip_selection_open = not st.session_state.trip_selection_open
+        if st.session_state.trip_selection_open and not st.session_state.trip_selected:
+            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+        st.rerun()
+
+if st.session_state.trip_selection_open:
+    # Clean up stale indices if routes were removed
+    st.session_state.trip_selected = {
+        i for i in st.session_state.trip_selected if i < len(st.session_state.routes)
+    }
+
+    _sel_rows = []
+    for _i, _entry in enumerate(st.session_state.routes):
+        _nodes = _entry.get("nodes") or []
+        _dist = int(sum(
+            _haversine(_nodes[_j]["lat"], _nodes[_j]["lon"], _nodes[_j + 1]["lat"], _nodes[_j + 1]["lon"])
+            for _j in range(len(_nodes) - 1) if _nodes[_j] and _nodes[_j + 1]
+        ))
+        _sel_rows.append({
+            "Select": _i in st.session_state.trip_selected,
+            "Mode":   MODE_ICONS[_entry["mode"]],
+            "Route":  " → ".join(_entry["legs"]),
+            "Date":   _entry.get("date", ""),
+            "km":     _dist,
+        })
+
+    _edited = st.data_editor(
+        _sel_rows,
+        column_config={
+            "Select": st.column_config.CheckboxColumn("", width="small"),
+            "Mode":   st.column_config.TextColumn("Mode", width="small"),
+            "Route":  st.column_config.TextColumn("Route"),
+            "Date":   st.column_config.TextColumn("Date", width="medium"),
+            "km":     st.column_config.NumberColumn("km", width="small", format="%d"),
+        },
+        disabled=["Mode", "Route", "Date", "km"],
+        hide_index=True,
+        key=f"trip_sel_{len(st.session_state.routes)}",
+        use_container_width=True,
+    )
+    _new_sel = {_i for _i, _r in enumerate(_edited) if _r["Select"]}
+    if _new_sel != st.session_state.trip_selected:
+        st.session_state.trip_selected = _new_sel
+        st.rerun()
+
+    _n_sel = len(st.session_state.trip_selected)
+    if _n_sel > 0 and st.button(
+        f"Create trip with {_n_sel} route{'s' if _n_sel != 1 else ''} →",
+        type="primary",
+        key="create_trip_btn",
+    ):
+        _selected_routes = [st.session_state.routes[_i] for _i in sorted(st.session_state.trip_selected)]
+        st.session_state.trip_draft = {
+            "version": 1,
+            "id": str(int(_time.time())),
+            "title": "",
+            "description": "",
+            "created_at": _date.today().isoformat(),
+            "stops": _routes_to_stops(_selected_routes),
+        }
+        st.session_state.trip_selection_open = False
+        st.switch_page("pages/2_Trip_Creator.py")

@@ -14,6 +14,7 @@ dependencies = [
     "pycountry>=24.0",
     "rapidfuzz>=3.14.5",
     "geopy>=2.4.1",
+    "streamlit-sortables>=0.2.0",
 ]
 
 # Scraper deps only needed for CLI ingestion, not the Streamlit app.
