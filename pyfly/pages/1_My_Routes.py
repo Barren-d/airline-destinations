@@ -988,11 +988,10 @@ st.pydeck_chart(
 # Convert to Trip
 # ---------------------------------------------------------------------------
 
-st.markdown("---")
-_btn_col, _ = st.columns([1, 3])
+_btn_col, _ = st.columns([1, 5])
 with _btn_col:
     _btn_label = "✕ Cancel" if st.session_state.trip_selection_open else "🗺 Convert to Trip →"
-    if st.button(_btn_label, use_container_width=True):
+    if st.button(_btn_label, type="primary", use_container_width=True):
         st.session_state.trip_selection_open = not st.session_state.trip_selection_open
         if st.session_state.trip_selection_open and not st.session_state.trip_selected:
             st.session_state.trip_selected = set(range(len(st.session_state.routes)))
@@ -1003,6 +1002,30 @@ if st.session_state.trip_selection_open:
     st.session_state.trip_selected = {
         i for i in st.session_state.trip_selected if i < len(st.session_state.routes)
     }
+
+    # Collect available tags for filter
+    _all_tags = sorted({e.get("tag", "").strip() for e in st.session_state.routes if e.get("tag", "").strip()})
+
+    _ctrl_left, _ctrl_mid, _ctrl_right = st.columns([1, 1, 2])
+    with _ctrl_left:
+        if st.button("Select all", key="trip_sel_all", use_container_width=True):
+            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+            st.rerun()
+    with _ctrl_mid:
+        if st.button("Deselect all", key="trip_desel_all", use_container_width=True):
+            st.session_state.trip_selected = set()
+            st.rerun()
+    with _ctrl_right:
+        if _all_tags:
+            _tag_filter = st.selectbox(
+                "Filter by tag", ["All tags"] + _all_tags,
+                key="trip_tag_filter", label_visibility="collapsed",
+            )
+            if _tag_filter != "All tags":
+                _tag_indices = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
+                if st.session_state.trip_selected != _tag_indices:
+                    st.session_state.trip_selected = _tag_indices
+                    st.rerun()
 
     _sel_rows = []
     for _i, _entry in enumerate(st.session_state.routes):
@@ -1015,6 +1038,7 @@ if st.session_state.trip_selection_open:
             "Select": _i in st.session_state.trip_selected,
             "Mode":   MODE_ICONS[_entry["mode"]],
             "Route":  " → ".join(_entry["legs"]),
+            "Tag":    _entry.get("tag", ""),
             "Date":   _entry.get("date", ""),
             "km":     _dist,
         })
@@ -1025,10 +1049,11 @@ if st.session_state.trip_selection_open:
             "Select": st.column_config.CheckboxColumn("", width="small"),
             "Mode":   st.column_config.TextColumn("Mode", width="small"),
             "Route":  st.column_config.TextColumn("Route"),
+            "Tag":    st.column_config.TextColumn("Tag", width="medium"),
             "Date":   st.column_config.TextColumn("Date", width="medium"),
             "km":     st.column_config.NumberColumn("km", width="small", format="%d"),
         },
-        disabled=["Mode", "Route", "Date", "km"],
+        disabled=["Mode", "Route", "Tag", "Date", "km"],
         hide_index=True,
         key=f"trip_sel_{len(st.session_state.routes)}",
         use_container_width=True,
