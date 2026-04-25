@@ -119,7 +119,7 @@ for _ti, _trip in enumerate(st.session_state.trips):
                 st.rerun()
             if st.button("✏ Edit", key=f"edit_{_ti}", use_container_width=True):
                 st.session_state.trip_draft = json.loads(json.dumps(_trip))
-                st.switch_page("pages/2_Trip_Creator.py")
+                st.switch_page("pages/4_Trip_Creator.py")
             if st.button("🗑", key=f"del_{_ti}", use_container_width=True, help="Delete trip"):
                 _to_delete = _ti
 

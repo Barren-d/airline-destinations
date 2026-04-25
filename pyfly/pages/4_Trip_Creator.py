@@ -287,7 +287,7 @@ with _save_col:
         st.session_state.trips.append(_to_save)
         st.session_state.trip_draft = None
         st.success("Trip saved!")
-        st.switch_page("pages/3_My_Trips.py")
+        st.switch_page("pages/5_My_Trips.py")
 
 with _discard_col:
     if st.button("🗑 Discard", use_container_width=True):

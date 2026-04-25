@@ -1054,4 +1054,4 @@ if st.session_state.trip_selection_open:
             "stops": _routes_to_stops(_selected_routes),
         }
         st.session_state.trip_selection_open = False
-        st.switch_page("pages/2_Trip_Creator.py")
+        st.switch_page("pages/4_Trip_Creator.py")
