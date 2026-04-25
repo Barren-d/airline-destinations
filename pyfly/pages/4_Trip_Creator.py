@@ -141,7 +141,7 @@ st.subheader("Stops")
 st.caption("Drag to reorder stops · use ↑↓ to reorder sections within a stop.")
 
 # Build sortable labels (index encoded so we can re-map after sort)
-_sort_labels = [f"{i}::{_stop_display(s)}" for i, s in enumerate(stops)]
+_sort_labels = [f"{i}::{stop_display(s)}" for i, s in enumerate(stops)]
 _sorted_labels = sort_items(_sort_labels, direction="vertical", key="stop_sort")
 
 # Re-order stops based on drag result
@@ -159,7 +159,7 @@ if _new_order and len(_new_order) == len(stops):
 _need_rerun = False
 
 for _si, stop in enumerate(stops):
-    with st.expander(f"{'~~' if stop.get('transited') else ''}**{_stop_display(stop)}**{'~~' if stop.get('transited') else ''}", expanded=not stop.get("transited")):
+    with st.expander(f"{'~~' if stop.get('transited') else ''}**{stop_display(stop)}**{'~~' if stop.get('transited') else ''}", expanded=not stop.get("transited")):
         _c1, _c2 = st.columns([3, 1])
         with _c1:
             stop["title"] = st.text_input(
