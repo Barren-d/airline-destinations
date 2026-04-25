@@ -949,4 +949,206 @@ Check status and continue from the first pending phase.
 - [ ] Phase 7  — Core pipeline: ingest → enrich → db, CLI runnable
 - [ ] Phase 8  — Streamlit app (read-only, toggle, scope, density, ArcLayer)
 - [x] Phase 9  — Streamlit Cloud deploy + GitHub Actions scrape schedule
-- [ ] Phase 10 — My Routes page (personal travel map, URL persistence, multi-mode)
+- [x] Phase 10 — My Routes page (personal travel map, URL persistence, multi-mode)
+- [ ] Phase 11 — My Trips (trip creator, blog-style markdown, My Trips collection page)
+
+---
+
+## Phase 11 — My Trips
+
+**Goal:** Convert logged routes into richly annotated travel blog entries — ordered stops with
+sections, transit metadata, live markdown preview, and a browsable trips collection page.
+
+**Status:** `[ ] pending`
+
+---
+
+### New dependency
+
+`streamlit-sortables` — drag-and-drop stop reordering (touch-friendly).
+Add to `pyproject.toml` dependencies.
+
+---
+
+### New session state keys
+
+```python
+trip_selection_open: bool        # whether selection table is visible below map
+trip_selected: list[int]         # indices into st.session_state.routes (persists across nav)
+trip_draft: dict | None          # trip currently being edited in Trip Creator
+trips: list[dict]                # saved trips collection
+```
+
+---
+
+### Data model (version 1)
+
+```json
+{
+  "version": 1,
+  "id": "1745600000",
+  "title": "Germany Loop",
+  "description": "Spring 2026 — Barcelona to Berlin.",
+  "created_at": "2026-04-25",
+  "stops": [
+    {
+      "node": {"iata": "BCN"},
+      "title": "Barcelona",
+      "transited": false,
+      "photos": [],
+      "sections": [
+        {"title": "Arrival", "notes": "Landed at El Prat...", "photos": []},
+        {"title": "Day 1",   "notes": "Sagrada Família...",  "photos": []}
+      ],
+      "transit_out": {"mode": "plane", "ref": "IB3105", "notes": ""}
+    },
+    {
+      "node": {"iata": "FRA"},
+      "title": "Frankfurt",
+      "transited": true,
+      "sections": [],
+      "transit_out": {"mode": "plane", "ref": "LH1234", "notes": ""}
+    },
+    {
+      "node": {"iata": "BER"},
+      "title": "Berlin",
+      "transited": false,
+      "sections": [
+        {"title": "Day 1", "notes": "Brandenburg Gate..."},
+        {"title": "Day 2", "notes": "Day trip to Potsdam."}
+      ],
+      "transit_out": null
+    }
+  ]
+}
+```
+
+Geocoded (non-IATA) node:
+```json
+{"node": {"label": "Barcelona", "lat": 41.3826, "lon": 2.1771}, ...}
+```
+
+**`ref` field label per mode in UI:**
+| mode  | label |
+|-------|-------|
+| plane | Flight number |
+| train | Train number |
+| boat  | Vessel |
+| car   | Bus / service no. |
+
+**Photos** (reserved for future use):
+- `photos` array on both stops and sections — omitted from JSON when empty
+- Each entry: `{"url": "...", "caption": "..."}` — caption optional
+- Stop-level photos = overview/cover shots for that city
+- Section-level photos = shots for that specific moment
+- No photo UI in phase 11; field is present in the schema so future versions can add it without a migration
+
+**Rules:**
+- Empty `ref`, `notes`, and `photos` omitted from saved JSON (same as `tag`/`date` on routes)
+- `sections: []` kept when `transited: true` (field always present)
+- `transit_out: null` on last stop
+- Shared nodes (same IATA in two selected routes) → two independent stops, no deduplication
+- Route → stops extraction: routes appended in selection order, nodes extracted in sequence
+
+---
+
+### Markdown output format
+
+```markdown
+# Germany Loop
+Spring 2026 — Barcelona to Berlin.
+
+## BCN — Barcelona
+### Arrival
+Landed at El Prat, took the Aerobus...
+
+### Day 1
+Sagrada Família in the morning...
+
+✈ IB3105 · via Frankfurt · 2,100 km
+
+## BER — Berlin
+### Day 1
+Brandenburg Gate and Museum Island...
+
+### Day 2
+Day trip to Potsdam.
+```
+
+Transit-only stops appear inline as `✈ IB3105 · via Frankfurt` between the two real stops.
+Distance computed as haversine sum across all legs through the transit nodes.
+
+---
+
+### Changes to `1_My_Routes.py`
+
+1. "Convert to Trip →" button below the pydeck map (only rendered when routes exist)
+2. Click sets `trip_selection_open = True` and triggers rerun
+3. Selection table rendered below map when open:
+   - `st.data_editor` with boolean Select column + Mode | Legs | Date | Distance columns
+   - Pre-selects `trip_selected` indices if returning from Trip Creator
+4. "Create Trip with X routes →" button:
+   - Writes selected route copies into `trip_draft.stops` (node extraction, all stops default `transited=False`)
+   - Sets `trip_selection_open = False`
+   - Navigates to Trip Creator via `st.switch_page`
+
+---
+
+### `2_Trip_Creator.py`
+
+**Top bar:**
+- "← Change selection" button → sets `trip_selection_open = True`, switches to My Routes
+
+**Trip header:**
+- `st.text_input` — title
+- `st.text_area` — description (markdown)
+
+**Stop list (streamlit-sortables):**
+- Each stop is a sortable item (drag handle on the stop card)
+- Stop card contains:
+  - Editable title (`st.text_input`, default from `airports.csv` municipality or IATA code)
+  - "Just transited" checkbox → collapses sections when checked
+  - If not transited: section list with ↑↓ buttons per section + "+ Add section" button
+    - Each section: `st.text_input` (title) + `st.text_area` (notes markdown)
+  - `transit_out` row (hidden on last stop): mode icon (from route, read-only) + ref input + notes input
+- Sections use **↑↓ buttons** (not drag) to avoid nested drag conflict with stop dragging
+
+**Preview panel** (below or beside stop list — test side-by-side first):
+- `st.markdown()` of generated markdown
+- pydeck map of trip routes only
+- If preview is slow on every keystroke → add "Refresh preview" button
+
+**Save:**
+- "Save Trip" → appends to `st.session_state.trips`, clears `trip_draft`, switches to My Trips
+
+---
+
+### `3_My_Trips.py`
+
+**Card grid:**
+- One card per saved trip: title, stop count, date, mode icons
+- Click card → expands to full blog view
+
+**Blog view:**
+- `st.markdown()` render of full trip markdown
+- pydeck map of all trip routes
+- "Edit" button → loads trip back into `trip_draft`, switches to Trip Creator
+- "Delete" button (with confirmation)
+
+**Persistence (phase 11 scope):**
+- Session state only — trips lost on refresh
+- `st.download_button` → exports `my_trips.json` (list of trip dicts, version=1)
+- `st.file_uploader` → imports `my_trips.json`, calls expand/hydration on each trip's nodes
+
+**Future persistence** (out of scope for phase 11):
+- DuckDB `trips` table — works locally but not on Streamlit Cloud across deploys
+- Streamlit Cloud: no free persistent storage; options to revisit later
+
+---
+
+### Implementation order
+
+1. `pyproject.toml` — add `streamlit-sortables`
+2. Session state additions + "Convert to Trip" button + selection table → `1_My_Routes.py`
+3. `2_Trip_Creator.py` — stop list, section editing, transit metadata, preview, save
+4. `3_My_Trips.py` — card grid, blog view, download/upload JSON
