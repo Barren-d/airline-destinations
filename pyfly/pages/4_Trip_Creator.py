@@ -21,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-MODE_REF_LABEL = {"plane": "Flight number", "train": "Train number", "boat": "Vessel", "car": "Bus / service no."}
+MODE_REF_LABEL = {"plane": "Flight no.", "train": "Train no.", "boat": "Vessel", "car": "Service no."}
 MODE_COLOUR = {
     "plane": [245, 158, 11, 200],
     "train": [16, 185, 129, 200],
@@ -32,7 +32,6 @@ MODE_ICONS = {"plane": "✈", "train": "🚂", "boat": "⛴", "car": "🚗"}
 
 
 def _iata_map_cached() -> dict:
-    """Lazy import to avoid circular dependency with My Routes page."""
     data_dir = _ROOT / "data"
     path = data_dir / "airports.csv"
     if not path.exists():
@@ -42,37 +41,51 @@ def _iata_map_cached() -> dict:
         df = pl.read_csv(path, ignore_errors=True).filter(
             pl.col("iata_code").is_not_null() & (pl.col("iata_code") != "")
         )
-        cols = ["iata_code", "latitude_deg", "longitude_deg"]
         st.session_state["_trip_iata_map"] = {
             r["iata_code"]: {"lat": r["latitude_deg"], "lon": r["longitude_deg"]}
-            for r in df.select(cols).iter_rows(named=True)
+            for r in df.select(["iata_code", "latitude_deg", "longitude_deg"]).iter_rows(named=True)
         }
     return st.session_state["_trip_iata_map"]
 
 
-def _build_trip_map_layers(stops: list[dict], iata_map: dict) -> list:
+def _build_trip_map_layers(route_groups: list[dict], iata_map: dict) -> tuple[list, list]:
+    """Return (pydeck layers, list of valid coords) for the trip map."""
     arc_rows, line_rows, node_rows = [], [], []
-    coords_list = []
-    for stop in stops:
-        c = node_coords(stop["node"], iata_map)
-        coords_list.append(c)
+    all_coords = []
 
-    for i in range(len(stops) - 1):
-        t_out = stops[i].get("transit_out") or {}
-        mode = t_out.get("mode", "plane")
-        c0, c1 = coords_list[i], coords_list[i + 1]
-        if not c0 or not c1:
-            continue
-        colour = MODE_COLOUR.get(mode, MODE_COLOUR["plane"])
-        row = {"origin_lat": c0[0], "origin_lon": c0[1],
-               "dest_lat": c1[0], "dest_lon": c1[1],
-               "colour": colour, "label": f"{stop_display(stops[i])} → {stop_display(stops[i+1])}"}
-        (arc_rows if mode == "plane" else line_rows).append(row)
+    for group in route_groups:
+        stops = group.get("stops") or []
+        mode = group.get("mode", "plane")
+        coords = [node_coords(s["node"], iata_map) for s in stops]
 
-    for i, stop in enumerate(stops):
-        c = coords_list[i]
-        if c:
-            node_rows.append({"lat": c[0], "lon": c[1], "label": stop_display(stop)})
+        # Departure leg: origin → first stop
+        _dep = group.get("departure")
+        if _dep and stops:
+            _dep_c = node_coords(_dep.get("node", {}), iata_map)
+            if _dep_c and coords[0]:
+                colour = MODE_COLOUR.get(mode, MODE_COLOUR["plane"])
+                row = {"origin_lat": _dep_c[0], "origin_lon": _dep_c[1],
+                       "dest_lat": coords[0][0], "dest_lon": coords[0][1], "colour": colour}
+                (arc_rows if mode == "plane" else line_rows).append(row)
+                all_coords.append(_dep_c)
+
+        all_coords.extend(c for c in coords if c)
+
+        for i in range(len(stops) - 1):
+            t_out = stops[i].get("transit_out") or {}
+            mode = t_out.get("mode", group.get("mode", "plane"))
+            c0, c1 = coords[i], coords[i + 1]
+            if not c0 or not c1:
+                continue
+            colour = MODE_COLOUR.get(mode, MODE_COLOUR["plane"])
+            row = {"origin_lat": c0[0], "origin_lon": c0[1],
+                   "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour}
+            (arc_rows if mode == "plane" else line_rows).append(row)
+
+        for i, stop in enumerate(stops):
+            c = coords[i]
+            if c:
+                node_rows.append({"lat": c[0], "lon": c[1], "label": stop_display(stop)})
 
     layers = []
     if arc_rows:
@@ -90,11 +103,11 @@ def _build_trip_map_layers(stops: list[dict], iata_map: dict) -> list:
         layers.append(pdk.Layer("ScatterplotLayer", data=node_rows,
             get_position=["lon", "lat"], get_fill_color=[255, 255, 255, 200],
             get_radius=50000, pickable=True))
-    return layers
+    return layers, all_coords
 
 
 # ---------------------------------------------------------------------------
-# Guard — must arrive from My Routes with a draft
+# Guard
 # ---------------------------------------------------------------------------
 
 if "trip_draft" not in st.session_state or not st.session_state.trip_draft:
@@ -110,13 +123,13 @@ iata_map = _iata_map_cached()
 # Top bar
 # ---------------------------------------------------------------------------
 
-_top_left, _top_right = st.columns([1, 5])
+_top_left, _ = st.columns([1, 5])
 with _top_left:
     if st.button("← Change selection"):
         st.session_state.trip_selection_open = True
         st.switch_page("pages/1_My_Routes.py")
 
-st.title("✈ Trip Creator")
+st.title("✏️ Trip Creator")
 
 # ---------------------------------------------------------------------------
 # Trip header
@@ -132,99 +145,152 @@ draft["description"] = st.text_area(
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Stop list
+# Route list — drag to reorder routes, nodes are fixed within each route
 # ---------------------------------------------------------------------------
 
-stops = draft.get("stops") or []
+routes = draft.get("routes") or []
 
-st.subheader("Stops")
-st.caption("Drag to reorder stops · use ↑↓ to reorder sections within a stop.")
+st.subheader("Routes")
+st.caption("Drag to reorder routes. Nodes within each route are fixed.")
 
-# Build sortable labels (index encoded so we can re-map after sort)
-_sort_labels = [f"{i}::{stop_display(s)}" for i, s in enumerate(stops)]
-_sorted_labels = sort_items(_sort_labels, direction="vertical", key="stop_sort")
+_sort_labels = [f"{i}::{r.get('label', f'Route {i+1}')}" for i, r in enumerate(routes)]
+_sorted_labels = sort_items(_sort_labels, direction="vertical", key="route_sort")
 
-# Re-order stops based on drag result
 _new_order = []
 for lbl in _sorted_labels:
     try:
         _idx = int(lbl.split("::")[0])
-        _new_order.append(stops[_idx])
+        _new_order.append(routes[_idx])
     except (ValueError, IndexError):
         pass
-if _new_order and len(_new_order) == len(stops):
-    stops = _new_order
-    draft["stops"] = stops
+if _new_order and len(_new_order) == len(routes):
+    routes = _new_order
+    draft["routes"] = routes
 
 _need_rerun = False
 
-for _si, stop in enumerate(stops):
-    with st.expander(f"{'~~' if stop.get('transited') else ''}**{stop_display(stop)}**{'~~' if stop.get('transited') else ''}", expanded=not stop.get("transited")):
-        _c1, _c2 = st.columns([3, 1])
-        with _c1:
-            stop["title"] = st.text_input(
-                "Stop title", value=stop.get("title", ""),
-                key=f"stop_title_{_si}", label_visibility="collapsed",
-                placeholder="City or place name",
-            )
-        with _c2:
-            stop["transited"] = st.checkbox(
-                "Just transited", value=stop.get("transited", False),
-                key=f"stop_transit_{_si}",
-            )
+for _ri, route in enumerate(routes):
+    _route_stops = route.get("stops") or []
+    _mode_icon = MODE_ICONS.get(route.get("mode", "plane"), "✈")
+    _auto_label = " → ".join(stop_display(s) for s in _route_stops) or route.get("label", f"Route {_ri + 1}")
+    _display_name = route.get("name") or _auto_label
 
-        if not stop.get("transited"):
-            sections = stop.get("sections") or []
+    route["name"] = st.text_input(
+        f"route_name_{_ri}", value=route.get("name", ""),
+        key=f"route_name_{_ri}",
+        placeholder=_auto_label,
+        label_visibility="collapsed",
+    )
 
-            for _seci, sec in enumerate(sections):
-                _sc1, _sc2, _sc3 = st.columns([3, 0.3, 0.3])
-                with _sc1:
-                    sec["title"] = st.text_input(
-                        "Section title", value=sec.get("title", ""),
-                        key=f"sec_title_{_si}_{_seci}", label_visibility="collapsed",
-                        placeholder="Day 1 / Arrival / Morning hike…",
-                    )
-                with _sc2:
-                    if _seci > 0 and st.button("↑", key=f"sec_up_{_si}_{_seci}", help="Move up"):
-                        sections[_seci - 1], sections[_seci] = sections[_seci], sections[_seci - 1]
-                        _need_rerun = True
-                with _sc3:
-                    if _seci < len(sections) - 1 and st.button("↓", key=f"sec_dn_{_si}_{_seci}", help="Move down"):
-                        sections[_seci], sections[_seci + 1] = sections[_seci + 1], sections[_seci]
-                        _need_rerun = True
+    with st.expander(f"{_mode_icon} **{route.get('name') or _auto_label}**", expanded=True):
+        # Departure segment — first leg from origin to first stop
+        _dep = route.get("departure")
+        if _dep:
+            _first_stop = _route_stops[0] if _route_stops else None
+            _dep_from = _dep.get("node", {}).get("iata") or _dep.get("title", "?")
+            _dep_to = (_first_stop["node"].get("iata") or stop_display(_first_stop)) if _first_stop else "?"
+            _pad0, _dep_col = st.columns([0.04, 1])
+            with _dep_col:
+                st.caption(f"{_mode_icon} {_dep_from} → {_dep_to}")
+                _d1, _d2, _d3, _d4 = st.columns([0.4, 1, 1.5, 2.5])
+                with _d1:
+                    st.markdown(f"**{_mode_icon}**")
+                with _d2:
+                    _dep["date"] = st.text_input("Date", value=_dep.get("date", ""),
+                        key=f"dep_date_{_ri}", placeholder="25 Apr")
+                with _d3:
+                    _dep["ref"] = st.text_input(
+                        MODE_REF_LABEL.get(route.get("mode", "plane"), "Ref"),
+                        value=_dep.get("ref", ""),
+                        key=f"dep_ref_{_ri}", placeholder="IB3105")
+                with _d4:
+                    _dep["notes"] = st.text_input("Notes", value=_dep.get("notes", ""),
+                        key=f"dep_notes_{_ri}", placeholder="Optional — overnight, rough seas…")
+            route["departure"] = _dep
 
-                sec["notes"] = st.text_area(
-                    "Notes", value=sec.get("notes", ""),
-                    key=f"sec_notes_{_si}_{_seci}", label_visibility="collapsed",
-                    placeholder="Write about this section… markdown supported.",
-                    height=100,
-                )
+        for _si, stop in enumerate(_route_stops):
+            _pad, _node_col = st.columns([0.04, 1])
+            with _node_col:
+                with st.container(border=True):
+                    _c1, _c2 = st.columns([4, 1])
+                    with _c1:
+                        stop["title"] = st.text_input(
+                            "Stop name", value=stop.get("title", ""),
+                            key=f"stop_title_{_ri}_{_si}",
+                            label_visibility="collapsed",
+                            placeholder="City or place name",
+                        )
+                    with _c2:
+                        stop["transited"] = st.checkbox(
+                            "Ignore", value=stop.get("transited", False),
+                            key=f"stop_ignore_{_ri}_{_si}",
+                        )
 
-            if st.button("+ Add section", key=f"add_sec_{_si}"):
-                sections.append({"title": "", "notes": "", "photos": []})
-                _need_rerun = True
+                    if not stop.get("transited"):
+                        sections = stop.get("sections") or [{"title": "", "notes": "", "photos": []}]
 
-            stop["sections"] = sections
+                        for _seci, sec in enumerate(sections):
+                            _sc1, _sc2, _sc3 = st.columns([3, 0.3, 0.3])
+                            with _sc1:
+                                sec["title"] = st.text_input(
+                                    "Section title", value=sec.get("title", ""),
+                                    key=f"sec_title_{_ri}_{_si}_{_seci}",
+                                    label_visibility="collapsed",
+                                    placeholder="Day 1 / Arrival / Morning hike…",
+                                )
+                            with _sc2:
+                                if _seci > 0 and st.button("↑", key=f"sec_up_{_ri}_{_si}_{_seci}", help="Move up"):
+                                    sections[_seci - 1], sections[_seci] = sections[_seci], sections[_seci - 1]
+                                    _need_rerun = True
+                            with _sc3:
+                                if _seci < len(sections) - 1 and st.button("↓", key=f"sec_dn_{_ri}_{_si}_{_seci}", help="Move down"):
+                                    sections[_seci], sections[_seci + 1] = sections[_seci + 1], sections[_seci]
+                                    _need_rerun = True
 
-        # Transit out
-        t_out = stop.get("transit_out")
-        if t_out is not None:
-            st.markdown("---")
-            _t1, _t2, _t3 = st.columns([1, 2, 3])
-            with _t1:
-                st.markdown(f"**{MODE_ICONS.get(t_out.get('mode','plane'))} {t_out.get('mode','').capitalize()}**")
-            with _t2:
-                t_out["ref"] = st.text_input(
-                    MODE_REF_LABEL.get(t_out.get("mode", "plane"), "Reference"),
-                    value=t_out.get("ref", ""),
-                    key=f"tref_{_si}", placeholder="e.g. IB3105",
-                )
-            with _t3:
-                t_out["notes"] = st.text_input(
-                    "Transit notes", value=t_out.get("notes", ""),
-                    key=f"tnotes_{_si}", placeholder="Optional — overnight, rough sea…",
-                )
-            stop["transit_out"] = t_out
+                            sec["notes"] = st.text_area(
+                                "Notes", value=sec.get("notes", ""),
+                                key=f"sec_notes_{_ri}_{_si}_{_seci}",
+                                label_visibility="collapsed",
+                                placeholder="Write about this section… markdown supported.",
+                                height=100,
+                            )
+
+                        if st.button("+ Add section", key=f"add_sec_{_ri}_{_si}"):
+                            sections.append({"title": "", "notes": "", "photos": []})
+                            _need_rerun = True
+
+                        stop["sections"] = sections
+
+            # Transit segment sits between nodes, outside the node card
+            t_out = stop.get("transit_out")
+            if t_out is not None:
+                _next_stop = _route_stops[_si + 1] if _si + 1 < len(_route_stops) else None
+                _seg_icon = MODE_ICONS.get(t_out.get("mode", "plane"), "✈")
+                _from_code = stop["node"].get("iata") or stop_display(stop)
+                _to_code = (_next_stop["node"].get("iata") or stop_display(_next_stop)) if _next_stop else "?"
+                _pad2, _transit_col = st.columns([0.04, 1])
+                with _transit_col:
+                    st.caption(f"{_seg_icon} {_from_code} → {_to_code}")
+                    _t1, _t2, _t3, _t4 = st.columns([0.4, 1, 1.5, 2.5])
+                    with _t1:
+                        st.markdown(f"**{_seg_icon}**")
+                    with _t2:
+                        t_out["date"] = st.text_input(
+                            "Date", value=t_out.get("date", ""),
+                            key=f"tdate_{_ri}_{_si}", placeholder="25 Apr",
+                        )
+                    with _t3:
+                        t_out["ref"] = st.text_input(
+                            MODE_REF_LABEL.get(t_out.get("mode", "plane"), "Ref"),
+                            value=t_out.get("ref", ""),
+                            key=f"tref_{_ri}_{_si}", placeholder="IB3105",
+                        )
+                    with _t4:
+                        t_out["notes"] = st.text_input(
+                            "Notes", value=t_out.get("notes", ""),
+                            key=f"tnotes_{_ri}_{_si}", placeholder="Optional — overnight, rough seas…",
+                        )
+                    stop["transit_out"] = t_out
 
 if _need_rerun:
     st.rerun()
@@ -232,7 +298,7 @@ if _need_rerun:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Preview + Save
+# Preview + Map
 # ---------------------------------------------------------------------------
 
 _prev_col, _map_col = st.columns([1, 1])
@@ -244,9 +310,7 @@ with _prev_col:
 
 with _map_col:
     st.subheader("Map")
-    _layers = _build_trip_map_layers(stops, iata_map)
-    _all_coords = [node_coords(s["node"], iata_map) for s in stops]
-    _all_coords = [c for c in _all_coords if c]
+    _layers, _all_coords = _build_trip_map_layers(routes, iata_map)
     if _all_coords:
         _clat = (max(c[0] for c in _all_coords) + min(c[0] for c in _all_coords)) / 2
         _clon = (max(c[1] for c in _all_coords) + min(c[1] for c in _all_coords)) / 2
@@ -266,28 +330,31 @@ with _map_col:
 
 st.markdown("---")
 
+# ---------------------------------------------------------------------------
+# Save / Discard
+# ---------------------------------------------------------------------------
+
 _save_col, _discard_col, _ = st.columns([1, 1, 3])
 
 with _save_col:
     if st.button("💾 Save Trip", type="primary", use_container_width=True):
-        # Strip empty photos/ref/notes before saving
-        _to_save = json.loads(json.dumps(draft))  # deep copy via JSON
-        for _stop in _to_save.get("stops") or []:
-            if not _stop.get("photos"):
-                _stop.pop("photos", None)
-            for _sec in _stop.get("sections") or []:
-                if not _sec.get("photos"):
-                    _sec.pop("photos", None)
-            _t = _stop.get("transit_out")
-            if _t:
-                if not _t.get("ref"):
-                    _t.pop("ref", None)
-                if not _t.get("notes"):
-                    _t.pop("notes", None)
+        _to_save = json.loads(json.dumps(draft))
+        for _group in _to_save.get("routes") or []:
+            for _stop in _group.get("stops") or []:
+                if not _stop.get("photos"):
+                    _stop.pop("photos", None)
+                for _sec in _stop.get("sections") or []:
+                    if not _sec.get("photos"):
+                        _sec.pop("photos", None)
+                _t = _stop.get("transit_out")
+                if _t:
+                    for _k in ("ref", "date", "notes"):
+                        if not _t.get(_k):
+                            _t.pop(_k, None)
         st.session_state.trips.append(_to_save)
         st.session_state.trip_draft = None
-        st.success("Trip saved!")
-        st.switch_page("pages/5_My_Trips.py")
+        st.session_state._goto_my_trips = True
+        st.rerun()
 
 with _discard_col:
     if st.button("🗑 Discard", use_container_width=True):

@@ -348,26 +348,36 @@ def _stop_title(node: dict) -> str:
     return node.get("label", "")
 
 
-def _routes_to_stops(routes: list[dict]) -> list[dict]:
-    stops = []
+def _routes_to_route_groups(routes: list[dict]) -> list[dict]:
+    groups = []
     for entry in routes:
         mode = entry["mode"]
-        for node in (entry.get("nodes") or []):
-            if not node:
-                continue
+        nodes = [n for n in (entry.get("nodes") or []) if n]
+        if not nodes:
+            continue
+        origin = nodes[0]
+        origin_slim = ({"iata": origin["iata"]} if origin.get("iata")
+                       else {"label": origin["label"], "lat": round(origin["lat"], 4), "lon": round(origin["lon"], 4)})
+        stops = []
+        for j, node in enumerate(nodes[1:], start=1):
             slim = ({"iata": node["iata"]} if node.get("iata")
                     else {"label": node["label"], "lat": round(node["lat"], 4), "lon": round(node["lon"], 4)})
+            is_last = j == len(nodes) - 1
             stops.append({
                 "node": slim,
                 "title": _stop_title(node),
                 "transited": False,
                 "photos": [],
-                "sections": [],
-                "transit_out": {"mode": mode, "ref": "", "notes": ""},
+                "sections": [{"title": "", "notes": "", "photos": []}],
+                "transit_out": None if is_last else {"mode": mode, "date": "", "ref": "", "notes": ""},
             })
-    if stops:
-        stops[-1]["transit_out"] = None
-    return stops
+        groups.append({
+            "label": " → ".join(entry.get("legs", [])),
+            "mode": mode,
+            "departure": {"node": origin_slim, "title": _stop_title(origin), "date": "", "ref": "", "notes": ""},
+            "stops": stops,
+        })
+    return groups
 
 
 def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
@@ -657,12 +667,19 @@ _load_url_once()
 # Add route is inside st.form — target it specifically so it stays red
 # while Convert to Trip (outside any form) inherits the blue primaryColor.
 st.markdown("""<style>
-button[data-testid="baseButton-primaryFormSubmit"] {
+/* Target the Add Route form submit button (inside stFormSubmitButton wrapper) */
+[data-testid="stFormSubmitButton"] button,
+[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"],
+button[data-testid="baseButton-primaryFormSubmit"],
+section[data-testid="stSidebar"] button[kind="primaryFormSubmit"] {
     background-color: #FF4B4B !important;
     border-color: #FF4B4B !important;
     color: white !important;
 }
-button[data-testid="baseButton-primaryFormSubmit"]:hover {
+[data-testid="stFormSubmitButton"] button:hover,
+[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover,
+button[data-testid="baseButton-primaryFormSubmit"]:hover,
+section[data-testid="stSidebar"] button[kind="primaryFormSubmit"]:hover {
     background-color: #E03333 !important;
     border-color: #E03333 !important;
 }
@@ -876,7 +893,12 @@ if not st.session_state.routes:
     st.info("Log your first route in the sidebar — try **BCN-LHR-JFK** with mode ✈ Plane.")
     st.stop()
 
-arc_rows, line_rows, road_rows, node_rows, total_km = _build_render_data(st.session_state.routes)
+_map_routes = (
+    [st.session_state.routes[i] for i in sorted(st.session_state.trip_selected)]
+    if st.session_state.get("trip_selection_open") and st.session_state.get("trip_selected")
+    else st.session_state.routes
+)
+arc_rows, line_rows, road_rows, node_rows, total_km = _build_render_data(_map_routes)
 counts, n_airports, n_cities, n_countries = _stats(st.session_state.routes)
 
 # Stats bar
@@ -1021,25 +1043,27 @@ if st.session_state.trip_selection_open:
     _all_tags = sorted({e.get("tag", "").strip() for e in st.session_state.routes if e.get("tag", "").strip()})
 
     _all_checked = len(st.session_state.trip_selected) >= len(st.session_state.routes)
-    _new_all = st.checkbox("Select all", value=_all_checked, key="trip_sel_all_chk")
-    if _new_all and not _all_checked:
-        st.session_state.trip_selected = set(range(len(st.session_state.routes)))
-        st.rerun()
-    elif not _new_all and _all_checked:
-        st.session_state.trip_selected = set()
-        st.rerun()
-
-    if _all_tags:
-        _tag_filter = st.pills(
-            "Filter by tag", _all_tags,
-            selection_mode="single", default=None,
-            key="trip_tag_filter", label_visibility="collapsed",
-        )
-        if _tag_filter:
-            _tag_indices = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
-            if st.session_state.trip_selected != _tag_indices:
-                st.session_state.trip_selected = _tag_indices
-                st.rerun()
+    _chk_col, _pills_col = st.columns([1, 4])
+    with _chk_col:
+        _new_all = st.checkbox("Select all", value=_all_checked, key="trip_sel_all_chk")
+        if _new_all and not _all_checked:
+            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+            st.rerun()
+        elif not _new_all and _all_checked:
+            st.session_state.trip_selected = set()
+            st.rerun()
+    with _pills_col:
+        if _all_tags:
+            _tag_filter = st.pills(
+                "Filter by tag", _all_tags,
+                selection_mode="single", default=None,
+                key="trip_tag_filter", label_visibility="collapsed",
+            )
+            if _tag_filter:
+                _tag_indices = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
+                if st.session_state.trip_selected != _tag_indices:
+                    st.session_state.trip_selected = _tag_indices
+                    st.rerun()
 
     _sel_rows = []
     for _i, _entry in enumerate(st.session_state.routes):
@@ -1090,7 +1114,8 @@ if st.session_state.trip_selection_open:
             "title": "",
             "description": "",
             "created_at": _date.today().isoformat(),
-            "stops": _routes_to_stops(_selected_routes),
+            "routes": _routes_to_route_groups(_selected_routes),
         }
         st.session_state.trip_selection_open = False
-        st.switch_page("pages/4_Trip_Creator.py")
+        st.session_state._goto_trip_creator = True
+        st.rerun()

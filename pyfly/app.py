@@ -132,4 +132,15 @@ if st.session_state.trip_draft:
     _pages.append(st.Page("pages/4_Trip_Creator.py", title="Trip Creator", icon="✏️"))
 
 pg = st.navigation(_pages)
+
+# Deferred navigation: switch_page only works once the target page is registered.
+# My Routes sets this flag + reruns; we handle it here after nav is built.
+if st.session_state.get("_goto_trip_creator") and st.session_state.trip_draft:
+    st.session_state._goto_trip_creator = False
+    st.switch_page("pages/4_Trip_Creator.py")
+
+if st.session_state.get("_goto_my_trips") and st.session_state.trips:
+    st.session_state._goto_my_trips = False
+    st.switch_page("pages/5_My_Trips.py")
+
 pg.run()
