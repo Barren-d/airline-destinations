@@ -654,6 +654,20 @@ def _stats(routes):
 _init_state()
 _load_url_once()
 
+# Add route is inside st.form — target it specifically so it stays red
+# while Convert to Trip (outside any form) inherits the blue primaryColor.
+st.markdown("""<style>
+button[data-testid="baseButton-primaryFormSubmit"] {
+    background-color: #FF4B4B !important;
+    border-color: #FF4B4B !important;
+    color: white !important;
+}
+button[data-testid="baseButton-primaryFormSubmit"]:hover {
+    background-color: #E03333 !important;
+    border-color: #E03333 !important;
+}
+</style>""", unsafe_allow_html=True)
+
 _need_rerun = False
 
 with st.sidebar:
@@ -1006,27 +1020,26 @@ if st.session_state.trip_selection_open:
     # Collect available tags for filter
     _all_tags = sorted({e.get("tag", "").strip() for e in st.session_state.routes if e.get("tag", "").strip()})
 
-    _chk_col, _tag_col = st.columns([1, 2])
-    with _chk_col:
-        _all_checked = len(st.session_state.trip_selected) >= len(st.session_state.routes)
-        _new_all = st.checkbox("Select all", value=_all_checked, key="trip_sel_all_chk")
-        if _new_all and not _all_checked:
-            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
-            st.rerun()
-        elif not _new_all and _all_checked:
-            st.session_state.trip_selected = set()
-            st.rerun()
-    with _tag_col:
-        if _all_tags:
-            _tag_filter = st.selectbox(
-                "Filter by tag", ["All tags"] + _all_tags,
-                key="trip_tag_filter", label_visibility="collapsed",
-            )
-            if _tag_filter != "All tags":
-                _tag_indices = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
-                if st.session_state.trip_selected != _tag_indices:
-                    st.session_state.trip_selected = _tag_indices
-                    st.rerun()
+    _all_checked = len(st.session_state.trip_selected) >= len(st.session_state.routes)
+    _new_all = st.checkbox("Select all", value=_all_checked, key="trip_sel_all_chk")
+    if _new_all and not _all_checked:
+        st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+        st.rerun()
+    elif not _new_all and _all_checked:
+        st.session_state.trip_selected = set()
+        st.rerun()
+
+    if _all_tags:
+        _tag_filter = st.pills(
+            "Filter by tag", _all_tags,
+            selection_mode="single", default=None,
+            key="trip_tag_filter", label_visibility="collapsed",
+        )
+        if _tag_filter:
+            _tag_indices = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
+            if st.session_state.trip_selected != _tag_indices:
+                st.session_state.trip_selected = _tag_indices
+                st.rerun()
 
     _sel_rows = []
     for _i, _entry in enumerate(st.session_state.routes):
