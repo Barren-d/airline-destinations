@@ -40,10 +40,8 @@ the 2017 global baseline, or real-time OpenSky records.
     with col1:
         st.markdown("### 🧳 My Routes")
         st.markdown(
-            "Log every route you've ever taken — flights, trains, boats, and car trips. "
-            "Each leg is mapped as a great circle arc or ground line, thickened by how "
-            "many times you've done it. Colour by region, filter by mode, share via URL "
-            "or JSON."
+            "Log every route you've taken — flights, trains, boats, and cars. "
+            "Visualised as great circle arcs, coloured by mode or region. Share via URL or export as JSON."
         )
 
     with col2:
