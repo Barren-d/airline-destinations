@@ -8,16 +8,11 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Initialise trip-related session state before navigation is built
-# so the conditional page list is always evaluated with valid keys.
-# ---------------------------------------------------------------------------
-for _k, _v in [("trip_draft", None), ("trips", [])]:
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
+if "trips" not in st.session_state:
+    st.session_state.trips = []
 
 # ---------------------------------------------------------------------------
-# Home page content (runs when Home is the active page)
+# Home page content
 # ---------------------------------------------------------------------------
 
 def _home():
@@ -119,25 +114,16 @@ or real-time OpenSky records.
 # ---------------------------------------------------------------------------
 
 _pages = [
-    st.Page(_home,                       title="Home",           icon="✈",  default=True),
-    st.Page("pages/1_My_Routes.py",      title="My Routes",      icon="🧳"),
-    st.Page("pages/2_Route_Explorer.py", title="Route Explorer", icon="🗺"),
+    st.Page(_home,                         title="Home",           icon="✈",  default=True),
+    st.Page("pages/1_My_Routes.py",        title="My Routes",      icon="🧳"),
+    st.Page("pages/2_Route_Explorer.py",   title="Route Explorer", icon="🗺"),
     st.Page("pages/3_Airport_Explorer.py", title="Airport Explorer", icon="🛬"),
 ]
 
 if st.session_state.trips:
     _pages.append(st.Page("pages/5_My_Trips.py", title="My Trips", icon="📖"))
 
-if st.session_state.trip_draft:
-    _pages.append(st.Page("pages/4_Trip_Creator.py", title="Trip Creator", icon="✏️"))
-
 pg = st.navigation(_pages)
-
-# Deferred navigation: switch_page only works once the target page is registered.
-# My Routes sets this flag + reruns; we handle it here after nav is built.
-if st.session_state.get("_goto_trip_creator") and st.session_state.trip_draft:
-    st.session_state._goto_trip_creator = False
-    st.switch_page("pages/4_Trip_Creator.py")
 
 if st.session_state.get("_goto_my_trips") and st.session_state.trips:
     st.session_state._goto_my_trips = False

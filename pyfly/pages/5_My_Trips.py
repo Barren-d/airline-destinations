@@ -1,4 +1,4 @@
-"""My Trips — collection of saved trips rendered as blog entries."""
+"""My Trips — collection of saved trips, each a named group of routes."""
 import sys
 import json
 from pathlib import Path
@@ -7,256 +7,516 @@ _ROOT = Path(__file__).parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import httpx
 import pydeck as pdk
 import streamlit as st
-from pyfly.trip_utils import generate_markdown
 
 st.set_page_config(
     page_title="My Trips — PyFly",
-    page_icon="🗺",
+    page_icon="📖",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 MODE_ICONS = {"plane": "✈", "train": "🚂", "boat": "⛴", "car": "🚗"}
+MODE_COLOUR = {
+    "plane": [245, 158, 11, 200],
+    "train": [16, 185, 129, 200],
+    "boat":  [6, 182, 212, 200],
+    "car":   [244, 63, 94, 200],
+}
+
+# ---------------------------------------------------------------------------
+# Airport lookup (includes ISO codes for region coloring)
+# ---------------------------------------------------------------------------
+
+def _iata_map() -> dict:
+    if "_trip_iata_map" not in st.session_state:
+        path = _ROOT / "data" / "airports.csv"
+        if path.exists():
+            import polars as pl
+            df = pl.read_csv(path, ignore_errors=True).filter(
+                pl.col("iata_code").is_not_null() & (pl.col("iata_code") != "")
+            )
+            cols = ["iata_code", "latitude_deg", "longitude_deg", "iso_country"]
+            for extra in ("iso_region",):
+                if extra in df.columns:
+                    cols.append(extra)
+            st.session_state["_trip_iata_map"] = {
+                r["iata_code"]: {k: v for k, v in r.items() if k != "iata_code"}
+                for r in df.select(cols).iter_rows(named=True)
+            }
+        else:
+            st.session_state["_trip_iata_map"] = {}
+    return st.session_state["_trip_iata_map"]
 
 
-def _stop_display(stop: dict) -> str:
-    return stop.get("title") or (stop.get("node") or {}).get("iata") or "Stop"
+# ---------------------------------------------------------------------------
+# Region coloring helpers (mirrors My Routes)
+# ---------------------------------------------------------------------------
+
+_GEO_URLS = {
+    "Country": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",
+    "Region":  "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces.geojson",
+}
 
 
-def _all_stops(trip: dict) -> list[dict]:
-    """Yield all stops regardless of new grouped or legacy flat format."""
-    if trip.get("routes") is not None:
-        return [s for g in trip["routes"] for s in (g.get("stops") or [])]
-    return trip.get("stops") or []
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def _trip_summary(trip: dict) -> str:
-    stops = [s for s in _all_stops(trip) if not s.get("transited")]
-    cities = " → ".join(_stop_display(s) for s in stops[:4])
-    if len(stops) > 4:
-        cities += f" +{len(stops) - 4} more"
-    return cities
+@st.cache_resource(show_spinner="Loading region data…")
+def _fetch_geojson(url: str) -> dict:
+    resp = httpx.get(url, timeout=90)
+    resp.raise_for_status()
+    raw = resp.json()
+    keep = {"ISO_A2", "iso_3166_2", "code_hasc"}
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": f["geometry"],
+                "properties": {k: v for k, v in (f.get("properties") or {}).items() if k in keep},
+            }
+            for f in raw.get("features", [])
+        ],
+    }
 
 
-def _mode_icons(trip: dict) -> str:
-    if trip.get("routes") is not None:
-        modes = {g.get("mode") for g in trip["routes"]} - {None}
-    else:
-        modes = {
-            (s.get("transit_out") or {}).get("mode")
-            for s in (trip.get("stops") or [])
-            if s.get("transit_out")
-        } - {None}
+def _pip_rings(px: float, py: float, rings: list) -> bool:
+    inside = False
+    for ring in rings:
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i][0], ring[i][1]
+            xj, yj = ring[j][0], ring[j][1]
+            if ((yi > py) != (yj > py)) and px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+                inside = not inside
+            j = i
+    return inside
+
+
+def _pip_feature(lon: float, lat: float, feature: dict) -> bool:
+    geom = feature.get("geometry") or {}
+    gtype, coords = geom.get("type"), geom.get("coordinates", [])
+    if gtype == "Polygon":
+        return _pip_rings(lon, lat, coords)
+    if gtype == "MultiPolygon":
+        return any(_pip_rings(lon, lat, rings) for rings in coords)
+    return False
+
+
+def _collect_visited_iso(routes, geojson: dict, level: str) -> set[str]:
+    iata_data = _iata_map()
+    visited: set[str] = set()
+    geocoded: list[dict] = []
+    for entry in routes:
+        for node in (entry.get("nodes") or []):
+            if not node:
+                continue
+            iata = node.get("iata")
+            if iata and iata in iata_data:
+                r = iata_data[iata]
+                iso = r.get("iso_country") if level == "Country" else r.get("iso_region")
+                if iso:
+                    visited.add(iso)
+            elif node.get("lat") is not None:
+                geocoded.append(node)
+    for node in geocoded:
+        for f in geojson.get("features", []):
+            if _pip_feature(node["lon"], node["lat"], f):
+                props = f.get("properties") or {}
+                if level == "Country":
+                    iso = props.get("ISO_A2")
+                else:
+                    iso = props.get("iso_3166_2") or props.get("code_hasc", "").replace(".", "-", 1) or None
+                if iso:
+                    visited.add(iso)
+                break
+    return visited
+
+
+def _filter_geojson(geojson: dict, visited: set[str], level: str) -> dict:
+    if level == "Country":
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                f for f in geojson["features"]
+                if (f.get("properties") or {}).get("ISO_A2") in visited
+            ],
+        }
+    visited_hasc = {v.replace("-", ".", 1) for v in visited}
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            f for f in geojson["features"]
+            if (
+                (f.get("properties") or {}).get("iso_3166_2") in visited
+                or (f.get("properties") or {}).get("code_hasc") in visited_hasc
+            )
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Map building
+# ---------------------------------------------------------------------------
+
+def _build_map(routes: list[dict], region_layer=None) -> tuple[list, list]:
+    """Return (pydeck layers, list of valid coords) for a list of route entries."""
+    iata = _iata_map()
+    arc_rows, line_rows, road_rows, node_rows, all_coords = [], [], [], [], []
+
+    for entry in routes:
+        mode = entry.get("mode", "plane")
+        colour = MODE_COLOUR.get(mode, [200, 200, 200, 200])
+        nodes = [n for n in (entry.get("nodes") or []) if n]
+        coords = []
+        for n in nodes:
+            if n.get("iata") and n["iata"] in iata:
+                c = iata[n["iata"]]
+                coords.append((c["latitude_deg"], c["longitude_deg"]))
+            elif n.get("lat") is not None:
+                coords.append((n["lat"], n["lon"]))
+            else:
+                coords.append(None)
+
+        all_coords.extend(c for c in coords if c)
+
+        for i in range(len(coords) - 1):
+            c0, c1 = coords[i], coords[i + 1]
+            if not c0 or not c1:
+                continue
+            row = {"origin_lat": c0[0], "origin_lon": c0[1],
+                   "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour}
+            if mode == "plane":
+                arc_rows.append(row)
+            elif mode == "car":
+                road_rows.append(row)
+            else:
+                line_rows.append(row)
+
+        n_coords = len(coords)
+        for i, c in enumerate(coords):
+            if c:
+                is_endpoint = (i == 0 or i == n_coords - 1)
+                node_rows.append({
+                    "lat": c[0], "lon": c[1],
+                    "radius": 8000 if is_endpoint else 4000,
+                    "opacity": 210 if is_endpoint else 120,
+                })
+
+    layers = []
+    if region_layer:
+        layers.append(region_layer)
+    if arc_rows:
+        layers.append(pdk.Layer("ArcLayer", data=arc_rows,
+            get_source_position=["origin_lon", "origin_lat"],
+            get_target_position=["dest_lon", "dest_lat"],
+            get_source_color="colour", get_target_color="colour",
+            get_width=2, pickable=True))
+    if line_rows:
+        layers.append(pdk.Layer("LineLayer", data=line_rows,
+            get_source_position=["origin_lon", "origin_lat"],
+            get_target_position=["dest_lon", "dest_lat"],
+            get_color="colour", get_width=2, pickable=True))
+    if road_rows:
+        layers.append(pdk.Layer("LineLayer", data=road_rows,
+            get_source_position=["origin_lon", "origin_lat"],
+            get_target_position=["dest_lon", "dest_lat"],
+            get_color="colour", get_width=2, pickable=True))
+    if node_rows:
+        layers.append(pdk.Layer("ScatterplotLayer", data=node_rows,
+            get_position=["lon", "lat"],
+            get_fill_color=[255, 255, 255, "opacity"],
+            get_radius="radius", pickable=True))
+    return layers, all_coords
+
+
+def _map_view(all_coords):
+    if not all_coords:
+        return 30.0, 0.0, 2
+    lats = [c[0] for c in all_coords]
+    lons = [c[1] for c in all_coords]
+    clat = (max(lats) + min(lats)) / 2
+    clon = (max(lons) + min(lons)) / 2
+    span = max(max(lats) - min(lats), max(lons) - min(lons))
+    zoom = 7 if span < 5 else 5 if span < 15 else 4 if span < 40 else 3 if span < 80 else 2
+    return clat, clon, zoom
+
+
+def _mode_summary(routes: list[dict]) -> str:
+    modes = {r.get("mode") for r in routes} - {None}
     return "  ".join(MODE_ICONS.get(m, "") for m in sorted(modes))
+
+
+def _route_label(entry: dict) -> str:
+    return " → ".join(entry.get("legs") or [])
 
 
 # ---------------------------------------------------------------------------
 # Guard
 # ---------------------------------------------------------------------------
 
-if "trips" not in st.session_state:
-    st.session_state.trips = []
-if "trip_draft" not in st.session_state:
-    st.session_state.trip_draft = None
-
-st.title("🗺 My Trips")
-
-if not st.session_state.trips:
-    st.info("No trips saved yet. Go to **My Routes**, select some routes, and click **Convert to Trip →**.")
-    if st.button("← Go to My Routes"):
-        st.switch_page("pages/1_My_Routes.py")
-    st.stop()
+for _k, _v in [("trips", []), ("routes", []), ("routes_selection_open", False), ("routes_selected", set())]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 # ---------------------------------------------------------------------------
-# Download / Upload
+# Sidebar
 # ---------------------------------------------------------------------------
 
-with st.expander("Import / Export", expanded=False):
-    _dl_col, _ul_col = st.columns(2)
-    with _dl_col:
+with st.sidebar:
+    # ── Region coloring ───────────────────────────────────────────────────────
+    st.subheader("Region coloring")
+    region_enabled = st.toggle("Color visited regions", value=False, key="trip_region_enabled")
+    if region_enabled:
+        st.selectbox("Scale", list(_GEO_URLS.keys()), key="trip_region_level")
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            st.color_picker("Colour", value="#3B82F6", key="trip_region_color")
+        with col_b:
+            st.slider("Opacity", 5, 80, 35, key="trip_region_opacity")
+
+    if st.session_state.get("trips"):
+        st.markdown("---")
+        st.subheader("Share")
         st.download_button(
-            "⬇ Download all trips",
+            "⬇ Download JSON",
             data=json.dumps(st.session_state.trips, indent=2),
             file_name="my_trips.json",
             mime="application/json",
             use_container_width=True,
         )
-    with _ul_col:
-        _uploaded = st.file_uploader("⬆ Upload trips JSON", type="json", label_visibility="collapsed")
-        if _uploaded:
-            try:
-                _data = json.loads(_uploaded.read().decode())
-                if isinstance(_data, list) and all(isinstance(t, dict) and ("routes" in t or "stops" in t) for t in _data):
-                    st.session_state.trips = _data
-                    st.success(f"Loaded {len(_data)} trip{'s' if len(_data) != 1 else ''}.")
-                    st.rerun()
-                else:
-                    st.error("Invalid format — expected a PyFly trips JSON export.")
-            except Exception:
-                st.error("Invalid JSON file.")
-
-st.markdown("---")
+        _up = st.file_uploader("⬆ Upload JSON", type="json", label_visibility="collapsed")
+        if _up:
+            if _up.size > 512_000:
+                st.error("File too large — expected a small PyFly trips export.")
+            else:
+                try:
+                    _data = json.loads(_up.read().decode())
+                    if isinstance(_data, list) and all(isinstance(t, dict) and "routes" in t for t in _data):
+                        st.session_state.trips = _data
+                        st.success(f"Loaded {len(_data)} trip{'s' if len(_data) != 1 else ''}.")
+                        st.rerun()
+                    else:
+                        st.error("Invalid format — expected a PyFly trips JSON export.")
+                except Exception:
+                    st.error("Invalid JSON file.")
 
 # ---------------------------------------------------------------------------
-# Trip cards + expanded blog view
+# Main
 # ---------------------------------------------------------------------------
 
-if "expanded_trip" not in st.session_state:
-    st.session_state.expanded_trip = None
+st.title("📖 My Trips")
+
+if not st.session_state.trips:
+    st.info("No trips saved yet. Go to **My Routes**, select some routes, and click **Save trip**.")
+    if st.button("← Go to My Routes"):
+        st.switch_page("pages/1_My_Routes.py")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Trip cards
+# ---------------------------------------------------------------------------
+
+if "collapsed_trips" not in st.session_state:
+    st.session_state.collapsed_trips = set()
+if "editing_trip" not in st.session_state:
+    st.session_state.editing_trip = None
 
 _to_delete = None
+_to_move = None  # (from_index, to_index)
+_n_trips = len(st.session_state.trips)
 
 for _ti, _trip in enumerate(st.session_state.trips):
+    _routes = _trip.get("routes") or []
     _title = _trip.get("title") or f"Trip {_ti + 1}"
-    _n_stops = len([s for s in _all_stops(_trip) if not s.get("transited")])
-    _summary = _trip_summary(_trip)
-    _icons = _mode_icons(_trip)
     _date = _trip.get("created_at", "")
+    _modes = _mode_summary(_routes)
+    _is_editing = st.session_state.editing_trip == _ti
 
     with st.container(border=True):
-        _card_left, _card_right = st.columns([5, 1])
-        with _card_left:
-            st.markdown(f"### {_title}")
-            st.caption(f"{_icons}  {_summary}")
-            if _date:
-                st.caption(f"Created {_date} · {_n_stops} stop{'s' if _n_stops != 1 else ''}")
-        with _card_right:
-            _is_open = st.session_state.expanded_trip == _ti
-            if st.button("▲ Close" if _is_open else "▼ Open", key=f"tog_{_ti}", use_container_width=True):
-                st.session_state.expanded_trip = None if _is_open else _ti
-                st.rerun()
-            if st.button("✏ Edit", key=f"edit_{_ti}", use_container_width=True):
-                st.session_state.trip_draft = json.loads(json.dumps(_trip))
-                st.switch_page("pages/4_Trip_Creator.py")
-            if st.button("🗑", key=f"del_{_ti}", use_container_width=True, help="Delete trip"):
-                _to_delete = _ti
+        _hd_left, _hd_right = st.columns([4, 2])
 
-        if st.session_state.expanded_trip == _ti:
+        with _hd_left:
+            if _is_editing:
+                _trip["title"] = st.text_input("Title", value=_title, key=f"edit_title_{_ti}",
+                                               label_visibility="collapsed", placeholder="Trip name…")
+                st.caption(f"{_modes}  ·  {len(_routes)} route{'s' if len(_routes) != 1 else ''}  ·  {_date}")
+                _trip["notes"] = st.text_area("Notes", value=_trip.get("notes", ""),
+                                              key=f"edit_notes_{_ti}",
+                                              placeholder="Add notes… (markdown supported)",
+                                              height=68, label_visibility="collapsed")
+            else:
+                st.markdown(f"### {_title}")
+                st.caption(f"{_modes}  ·  {len(_routes)} route{'s' if len(_routes) != 1 else ''}  ·  {_date}")
+                if _trip.get("notes"):
+                    st.markdown(_trip["notes"])
+
+        with _hd_right:
+            _is_open = _ti not in st.session_state.collapsed_trips
+            _b1, _b2, _b3, _b4, _b5 = st.columns(5)
+            with _b1:
+                if st.button("▼" if _is_open else "▶", key=f"tog_{_ti}",
+                             use_container_width=True, help="Collapse" if _is_open else "Expand"):
+                    if _is_open:
+                        st.session_state.collapsed_trips.add(_ti)
+                    else:
+                        st.session_state.collapsed_trips.discard(_ti)
+                    st.rerun()
+            with _b2:
+                if st.button("💾" if _is_editing else "✏", key=f"edit_{_ti}", use_container_width=True,
+                             help="Save" if _is_editing else "Edit"):
+                    if _is_editing:
+                        st.session_state.editing_trip = None
+                    else:
+                        st.session_state.editing_trip = _ti
+                    st.rerun()
+            with _b3:
+                st.button("↑", key=f"up_{_ti}", use_container_width=True, help="Move up",
+                          disabled=_is_open or _ti == 0,
+                          on_click=lambda i=_ti: st.session_state.update(_move=(i, i - 1)))
+            with _b4:
+                st.button("↓", key=f"dn_{_ti}", use_container_width=True, help="Move down",
+                          disabled=_is_open or _ti == _n_trips - 1,
+                          on_click=lambda i=_ti: st.session_state.update(_move=(i, i + 1)))
+            with _b5:
+                if st.button("🗑", key=f"del_{_ti}", use_container_width=True, help="Delete trip"):
+                    _to_delete = _ti
+
+        if _ti not in st.session_state.collapsed_trips:
             st.markdown("---")
-            _blog_col, _map_col = st.columns([1, 1])
-
-            with _blog_col:
-                _iata_m = st.session_state.get("_trip_iata_map", {})
-                _md = generate_markdown(_trip, _iata_m)
-                st.markdown(_md if _md.strip() else "_No content yet._")
+            _map_col, _list_col = st.columns([4, 3])
 
             with _map_col:
-                # Build map
                 try:
-                    import math as _math
-                    _data_dir = _ROOT / "data"
-                    import polars as pl
-                    _airports_path = _data_dir / "airports.csv"
-                    if "_trip_iata_map" not in st.session_state and _airports_path.exists():
-                        _df = pl.read_csv(_airports_path, ignore_errors=True).filter(
-                            pl.col("iata_code").is_not_null() & (pl.col("iata_code") != "")
-                        )
-                        st.session_state["_trip_iata_map"] = {
-                            r["iata_code"]: {"lat": r["latitude_deg"], "lon": r["longitude_deg"]}
-                            for r in _df.select(["iata_code", "latitude_deg", "longitude_deg"]).iter_rows(named=True)
-                        }
-                    _iata_m = st.session_state.get("_trip_iata_map", {})
+                    # Build region layer for this trip's routes
+                    _region_layer = None
+                    if st.session_state.get("trip_region_enabled") and _routes:
+                        try:
+                            _geo_url = _GEO_URLS[st.session_state.get("trip_region_level", "Country")]
+                            _geojson = _fetch_geojson(_geo_url)
+                            _visited = _collect_visited_iso(_routes, _geojson, st.session_state.get("trip_region_level", "Country"))
+                            _filtered = _filter_geojson(_geojson, _visited, st.session_state.get("trip_region_level", "Country"))
+                            if _filtered["features"]:
+                                _r, _g, _b = _hex_to_rgb(st.session_state.get("trip_region_color", "#3B82F6"))
+                                _fill_a = int(st.session_state.get("trip_region_opacity", 35) * 255 / 100)
+                                _line_a = min(255, _fill_a * 3)
+                                _region_layer = pdk.Layer(
+                                    "GeoJsonLayer", data=_filtered,
+                                    get_fill_color=[_r, _g, _b, _fill_a],
+                                    get_line_color=[_r, _g, _b, _line_a],
+                                    get_line_width=1, pickable=False,
+                                )
+                        except Exception:
+                            pass
 
-                    _COLOUR = {"plane": [245, 158, 11, 200], "train": [16, 185, 129, 200],
-                               "boat": [6, 182, 212, 200], "car": [244, 63, 94, 200]}
-                    _arc_rows, _line_rows, _node_rows = [], [], []
-                    _all_coords = []
-
-                    # Handle new grouped format (routes) and legacy flat format (stops)
-                    _route_groups = _trip.get("routes")
-                    if _route_groups is None:
-                        _route_groups = [{"mode": "plane", "stops": _trip.get("stops") or []}]
-
-                    for _group in _route_groups:
-                        _stops = _group.get("stops") or []
-                        _coords = []
-                        for _s in _stops:
-                            _nd = _s.get("node") or {}
-                            if _nd.get("iata") and _nd["iata"] in _iata_m:
-                                _c2 = _iata_m[_nd["iata"]]
-                                _coords.append((_c2["lat"], _c2["lon"]))
-                            elif _nd.get("lat") is not None:
-                                _coords.append((_nd["lat"], _nd["lon"]))
-                            else:
-                                _coords.append(None)
-                        _all_coords.extend(c for c in _coords if c)
-
-                        # Departure leg
-                        _dep2 = _group.get("departure")
-                        if _dep2 and _coords:
-                            _dc = None
-                            _dn = _dep2.get("node", {})
-                            if _dn.get("iata") and _dn["iata"] in _iata_m:
-                                _r = _iata_m[_dn["iata"]]
-                                _dc = (_r["lat"], _r["lon"])
-                            elif _dn.get("lat") is not None:
-                                _dc = (_dn["lat"], _dn["lon"])
-                            if _dc and _coords[0]:
-                                _gm = _group.get("mode", "plane")
-                                _colour = _COLOUR.get(_gm, [200, 200, 200, 200])
-                                _row = {"origin_lat": _dc[0], "origin_lon": _dc[1],
-                                        "dest_lat": _coords[0][0], "dest_lon": _coords[0][1], "colour": _colour}
-                                (_arc_rows if _gm == "plane" else _line_rows).append(_row)
-                                _node_rows.append({"lat": _dc[0], "lon": _dc[1]})
-                                _all_coords.append(_dc)
-
-                        for _i in range(len(_stops) - 1):
-                            _t = (_stops[_i].get("transit_out") or {})
-                            _mode = _t.get("mode", _group.get("mode", "plane"))
-                            _c0, _c1 = _coords[_i], _coords[_i + 1]
-                            if not _c0 or not _c1:
-                                continue
-                            _colour = _COLOUR.get(_mode, [200, 200, 200, 200])
-                            _row = {"origin_lat": _c0[0], "origin_lon": _c0[1],
-                                    "dest_lat": _c1[0], "dest_lon": _c1[1], "colour": _colour}
-                            (_arc_rows if _mode == "plane" else _line_rows).append(_row)
-
-                        for _c in _coords:
-                            if _c:
-                                _node_rows.append({"lat": _c[0], "lon": _c[1]})
-
-                    _coords = _all_coords
-
-                    _layers = []
-                    if _arc_rows:
-                        _layers.append(pdk.Layer("ArcLayer", data=_arc_rows,
-                            get_source_position=["origin_lon", "origin_lat"],
-                            get_target_position=["dest_lon", "dest_lat"],
-                            get_source_color="colour", get_target_color="colour", get_width=2))
-                    if _line_rows:
-                        _layers.append(pdk.Layer("LineLayer", data=_line_rows,
-                            get_source_position=["origin_lon", "origin_lat"],
-                            get_target_position=["dest_lon", "dest_lat"],
-                            get_color="colour", get_width=2))
-                    if _node_rows:
-                        _layers.append(pdk.Layer("ScatterplotLayer", data=_node_rows,
-                            get_position=["lon", "lat"],
-                            get_fill_color=[255, 255, 255, 200], get_radius=50000))
-
-                    _valid = [c for c in _coords if c]
-                    if _valid:
-                        _clat = (max(c[0] for c in _valid) + min(c[0] for c in _valid)) / 2
-                        _clon = (max(c[1] for c in _valid) + min(c[1] for c in _valid)) / 2
-                        _span = max(
-                            max(c[0] for c in _valid) - min(c[0] for c in _valid),
-                            max(c[1] for c in _valid) - min(c[1] for c in _valid),
-                        )
-                        _zoom = 7 if _span < 5 else 5 if _span < 15 else 4 if _span < 40 else 3 if _span < 80 else 2
-                    else:
-                        _clat, _clon, _zoom = 30.0, 0.0, 2
-
+                    _layers, _coords = _build_map(_routes, _region_layer)
+                    _clat, _clon, _zoom = _map_view(_coords)
                     st.pydeck_chart(pdk.Deck(
                         layers=_layers,
                         initial_view_state=pdk.ViewState(latitude=_clat, longitude=_clon, zoom=_zoom, pitch=20),
                         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-                    ), height=400)
+                    ), height=500)
                 except Exception as _e:
                     st.caption(f"Map unavailable: {_e}")
 
+            with _list_col:
+                for _r in _routes:
+                    _icon = MODE_ICONS.get(_r.get("mode", "plane"), "✈")
+                    _lbl = _route_label(_r)
+                    _r_date = _r.get("date", "")
+                    _r_tag = _r.get("tag", "")
+                    _meta = "  ·  ".join(x for x in [_r_date, _r_tag] if x)
+                    st.markdown(f"{_icon} **{_lbl}**" + (f"  \n_{_meta}_" if _meta else ""))
+
 if _to_delete is not None:
     st.session_state.trips.pop(_to_delete)
-    if st.session_state.expanded_trip == _to_delete:
-        st.session_state.expanded_trip = None
+    st.session_state.collapsed_trips = {
+        i if i < _to_delete else i - 1
+        for i in st.session_state.collapsed_trips if i != _to_delete
+    }
+    if st.session_state.editing_trip == _to_delete:
+        st.session_state.editing_trip = None
     st.rerun()
+
+if "_move" in st.session_state:
+    _a, _b = st.session_state.pop("_move")
+    trips = st.session_state.trips
+    trips[_a], trips[_b] = trips[_b], trips[_a]
+    def _remap(idx):
+        if idx == _a: return _b
+        if idx == _b: return _a
+        return idx
+    st.session_state.collapsed_trips = {_remap(i) for i in st.session_state.collapsed_trips}
+    if st.session_state.editing_trip in (_a, _b):
+        st.session_state.editing_trip = _remap(st.session_state.editing_trip)
+    st.rerun()
+
+# ---------------------------------------------------------------------------
+# Convert to Routes
+# ---------------------------------------------------------------------------
+
+_btn_col, _ = st.columns([1, 5])
+with _btn_col:
+    _btn_label = "✕ Cancel" if st.session_state.routes_selection_open else "🧳 Convert to Routes →"
+    if st.button(_btn_label, type="primary", use_container_width=True):
+        st.session_state.routes_selection_open = not st.session_state.routes_selection_open
+        if st.session_state.routes_selection_open and not st.session_state.routes_selected:
+            st.session_state.routes_selected = set(range(len(st.session_state.trips)))
+        st.rerun()
+
+if st.session_state.routes_selection_open:
+    st.session_state.routes_selected = {
+        i for i in st.session_state.routes_selected if i < len(st.session_state.trips)
+    }
+
+    _all_checked = len(st.session_state.routes_selected) >= len(st.session_state.trips)
+    if st.checkbox("Select all", value=_all_checked, key="routes_sel_all_chk"):
+        st.session_state.routes_selected = set(range(len(st.session_state.trips)))
+    else:
+        if _all_checked:
+            st.session_state.routes_selected = set()
+
+    _sel_rows = []
+    for _i, _trip in enumerate(st.session_state.trips):
+        _r_list = _trip.get("routes") or []
+        _sel_rows.append({
+            "Select": _i in st.session_state.routes_selected,
+            "Trip":   _trip.get("title") or f"Trip {_i + 1}",
+            "Modes":  _mode_summary(_r_list),
+            "Routes": len(_r_list),
+            "Date":   _trip.get("created_at", ""),
+        })
+
+    _edited = st.data_editor(
+        _sel_rows,
+        column_config={
+            "Select": st.column_config.CheckboxColumn("Select", width="small"),
+            "Trip":   st.column_config.TextColumn("Trip"),
+            "Modes":  st.column_config.TextColumn("Modes", width="small"),
+            "Routes": st.column_config.NumberColumn("Routes", width="small"),
+            "Date":   st.column_config.TextColumn("Date", width="small"),
+        },
+        disabled=["Trip", "Modes", "Routes", "Date"],
+        hide_index=True,
+        key="routes_sel_editor",
+        use_container_width=True,
+    )
+    st.session_state.routes_selected = {_i for _i, _r in enumerate(_edited) if _r["Select"]}
+
+    _n_sel = len(st.session_state.routes_selected)
+    if _n_sel > 0:
+        _n_routes = sum(len((st.session_state.trips[_i].get("routes") or [])) for _i in st.session_state.routes_selected)
+        if st.button(f"🧳 Add {_n_routes} route{'s' if _n_routes != 1 else ''} to My Routes",
+                     type="primary", use_container_width=True, key="convert_to_routes_btn"):
+            for _i in sorted(st.session_state.routes_selected):
+                for _route in (st.session_state.trips[_i].get("routes") or []):
+                    st.session_state.routes.append(_route)
+            st.session_state.routes_selection_open = False
+            st.session_state.routes_selected = set()
+            st.switch_page("pages/1_My_Routes.py")
