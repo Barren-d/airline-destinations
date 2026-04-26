@@ -5,6 +5,8 @@ import json
 import gzip
 import base64
 import math
+import time as _time
+from datetime import date as _date
 from pathlib import Path
 
 _ROOT = Path(__file__).parent.parent.parent
@@ -338,6 +340,8 @@ def _filter_geojson(geojson: dict, visited: set[str], level: str) -> dict:
     }
 
 
+
+
 def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
     """Return (auto_resolved_node, candidates_if_ambiguous)."""
     upper = token.strip().upper()
@@ -387,7 +391,11 @@ def _resolve(token: str, mode: str) -> tuple[dict | None, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _init_state():
-    defaults = {"routes": [], "geocode_cache": {}, "road_cache": {}, "pending": None, "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None}
+    defaults = {
+        "routes": [], "geocode_cache": {}, "road_cache": {}, "pending": None,
+        "_url_loaded": False, "_date_clear": 0, "_route_clear": 0, "_focus_nodes": None,
+        "trip_selection_open": False, "trip_selected": set(), "trips": [],
+    }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -595,9 +603,14 @@ def _stats(routes):
     counts = {m: 0 for m in MODES.values()}
     airports, cities, countries = set(), set(), set()
     iata_map = _iata_map()
+    geocoded_latlon = []
+
     for entry in routes:
-        legs = max(1, len(entry.get("nodes") or []) - 1)
-        counts[entry["mode"]] += legs
+        n_nodes = len([n for n in (entry.get("nodes") or []) if n])
+        if entry["mode"] in ("plane", "car"):
+            counts[entry["mode"]] += max(1, n_nodes - 1)
+        else:
+            counts[entry["mode"]] += 1
         for node in entry.get("nodes") or []:
             if not node:
                 continue
@@ -606,8 +619,25 @@ def _stats(routes):
                 iso = iata_map.get(node["iata"], {}).get("iso_country")
                 if iso:
                     countries.add(iso)
-            else:
+            elif node.get("label"):
                 cities.add(node["label"])
+                if node.get("lat") is not None:
+                    geocoded_latlon.append((node["lat"], node["lon"]))
+
+    # Resolve countries for geocoded (non-IATA) nodes via point-in-polygon
+    if geocoded_latlon:
+        try:
+            geojson = _fetch_geojson(_GEO_URLS["Country"])
+            for lat, lon in geocoded_latlon:
+                for f in geojson["features"]:
+                    if _pip_feature(lon, lat, f):
+                        iso = (f.get("properties") or {}).get("ISO_A2")
+                        if iso:
+                            countries.add(iso)
+                        break
+        except Exception:
+            pass
+
     return counts, len(airports), len(cities), len(countries)
 
 
@@ -617,6 +647,23 @@ def _stats(routes):
 
 _init_state()
 _load_url_once()
+
+# Add route is inside st.form — target it specifically so it stays red
+# while Convert to Trip (outside any form) inherits the blue primaryColor.
+st.markdown("""<style>
+/* Only the sidebar Add Route submit button is red — main panel forms inherit blue primaryColor */
+section[data-testid="stSidebar"] [data-testid="stFormSubmitButton"] button,
+section[data-testid="stSidebar"] button[data-testid="baseButton-primaryFormSubmit"] {
+    background-color: #FF4B4B !important;
+    border-color: #FF4B4B !important;
+    color: white !important;
+}
+section[data-testid="stSidebar"] [data-testid="stFormSubmitButton"] button:hover,
+section[data-testid="stSidebar"] button[data-testid="baseButton-primaryFormSubmit"]:hover {
+    background-color: #E03333 !important;
+    border-color: #E03333 !important;
+}
+</style>""", unsafe_allow_html=True)
 
 _need_rerun = False
 
@@ -826,7 +873,12 @@ if not st.session_state.routes:
     st.info("Log your first route in the sidebar — try **BCN-LHR-JFK** with mode ✈ Plane.")
     st.stop()
 
-arc_rows, line_rows, road_rows, node_rows, total_km = _build_render_data(st.session_state.routes)
+_map_routes = (
+    [st.session_state.routes[i] for i in sorted(st.session_state.trip_selected)]
+    if st.session_state.get("trip_selection_open") and st.session_state.get("trip_selected")
+    else st.session_state.routes
+)
+arc_rows, line_rows, road_rows, node_rows, total_km = _build_render_data(_map_routes)
 counts, n_airports, n_cities, n_countries = _stats(st.session_state.routes)
 
 # Stats bar
@@ -947,3 +999,103 @@ st.pydeck_chart(
     height=680,
     width="stretch",
 )
+
+# ---------------------------------------------------------------------------
+# Convert to Trip
+# ---------------------------------------------------------------------------
+
+_btn_col, _ = st.columns([1, 5])
+with _btn_col:
+    _btn_label = "✕ Cancel" if st.session_state.trip_selection_open else "🗺 Convert to Trip →"
+    if st.button(_btn_label, type="primary", use_container_width=True):
+        st.session_state.trip_selection_open = not st.session_state.trip_selection_open
+        if st.session_state.trip_selection_open:
+            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+        st.rerun()
+
+if st.session_state.trip_selection_open:
+    # Clean up stale indices if routes were removed
+    st.session_state.trip_selected = {
+        i for i in st.session_state.trip_selected if i < len(st.session_state.routes)
+    }
+
+    _all_tags = sorted({e.get("tag", "").strip() for e in st.session_state.routes if e.get("tag", "").strip()})
+
+    _all_checked = len(st.session_state.trip_selected) >= len(st.session_state.routes)
+    _chk_col, _pills_col = st.columns([1, 4])
+    with _chk_col:
+        if st.checkbox("Select all", value=_all_checked, key="trip_sel_all_chk"):
+            st.session_state.trip_selected = set(range(len(st.session_state.routes)))
+        else:
+            if _all_checked:
+                st.session_state.trip_selected = set()
+    with _pills_col:
+        if _all_tags:
+            _tag_filter = st.pills(
+                "Filter by tag", _all_tags,
+                selection_mode="single", default=None,
+                key="trip_tag_filter", label_visibility="collapsed",
+            )
+            if _tag_filter:
+                st.session_state.trip_selected = {i for i, e in enumerate(st.session_state.routes) if e.get("tag", "").strip() == _tag_filter}
+
+    def _on_sel_change():
+        state = st.session_state.get("trip_sel_editor") or {}
+        for row_idx, changes in (state.get("edited_rows") or {}).items():
+            if "Select" in changes:
+                idx = int(row_idx) if isinstance(row_idx, str) else row_idx
+                if changes["Select"]:
+                    st.session_state.trip_selected.add(idx)
+                else:
+                    st.session_state.trip_selected.discard(idx)
+
+    _sel_rows = []
+    for _i, _entry in enumerate(st.session_state.routes):
+        _nodes = _entry.get("nodes") or []
+        _dist = int(sum(
+            _haversine(_nodes[_j]["lat"], _nodes[_j]["lon"], _nodes[_j + 1]["lat"], _nodes[_j + 1]["lon"])
+            for _j in range(len(_nodes) - 1) if _nodes[_j] and _nodes[_j + 1]
+        ))
+        _sel_rows.append({
+            "Select": _i in st.session_state.trip_selected,
+            "Mode":   MODE_ICONS[_entry["mode"]],
+            "Route":  " → ".join(_entry["legs"]),
+            "Tag":    _entry.get("tag", ""),
+            "Date":   _entry.get("date", ""),
+            "km":     _dist,
+        })
+
+    st.data_editor(
+        _sel_rows,
+        column_config={
+            "Select": st.column_config.CheckboxColumn("", width="small"),
+            "Mode":   st.column_config.TextColumn("Mode", width="small"),
+            "Route":  st.column_config.TextColumn("Route"),
+            "Tag":    st.column_config.TextColumn("Tag", width="medium"),
+            "Date":   st.column_config.TextColumn("Date", width="medium"),
+            "km":     st.column_config.NumberColumn("km", width="small", format="%d"),
+        },
+        disabled=["Mode", "Route", "Tag", "Date", "km"],
+        hide_index=True,
+        key="trip_sel_editor",
+        on_change=_on_sel_change,
+        use_container_width=True,
+        height=38 + len(_sel_rows) * 35,
+    )
+
+    _n_sel = len(st.session_state.trip_selected)
+    if _n_sel > 0:
+        if st.button(f"💾 Save trip with {_n_sel} route{'s' if _n_sel != 1 else ''}", type="primary", use_container_width=True, key="save_trip_btn"):
+            _selected_routes = [st.session_state.routes[_i] for _i in sorted(st.session_state.trip_selected)]
+            st.session_state.trips.append({
+                "version": 1,
+                "id": str(int(_time.time())),
+                "title": f"Trip {len(st.session_state.trips) + 1}",
+                "notes": "",
+                "created_at": _date.today().isoformat(),
+                "routes": _selected_routes,
+            })
+            st.session_state.trip_selection_open = False
+            st.session_state.trip_selected = set()
+            st.session_state._goto_my_trips = True
+            st.rerun()

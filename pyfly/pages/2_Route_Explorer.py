@@ -215,10 +215,8 @@ with stats_slot:
 # ---------------------------------------------------------------------------
 
 age = data_age_hours(selected_source)
-if age is not None and age > 48:
-    st.error(f"⚠️ Data is {age:.0f}h old — the scraper may need attention.")
-elif age is not None and age > 6:
-    st.warning(f"Data is {age:.0f}h old.")
+if age is not None:
+    st.caption(f"Data last retrieved {age:.0f}h ago.")
 
 if capped:
     st.info(f"Showing top {max_arcs} routes. Adjust with the sidebar slider.")
