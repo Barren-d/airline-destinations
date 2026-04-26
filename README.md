@@ -4,9 +4,11 @@
 
 Map your personal travel history and explore the world's flight network.
 
-PyFly has two pages:
-- **My Routes** — log every route you've taken (flights, trains, boats, cars). Arcs thicken by how many times you've done the route, coloured by mode. Share via URL or export as JSON.
+PyFly has four pages:
+- **My Routes** — log every route you've taken (flights, trains, boats, cars). Arcs thicken by how many times you've done the route, coloured by mode or region. Share via URL or export as JSON. Convert any selection into a trip.
+- **My Trips** — group routes into named trips with markdown notes. Collapsible cards, each with its own map and region colouring. Reorder, edit, delete, or convert a trip back into individual routes. Unlocked once you save your first trip.
 - **Route Explorer** — browse scheduled and historical flight routes as great circle arcs. Explore the live AENA Spanish network, a 2017 global baseline covering 3,400+ airports, or real-time OpenSky records.
+- **Airport Explorer** — find airports worldwide on an interactive map. Filter by type and country, look up IATA codes and coordinates.
 
 ---
 
@@ -69,9 +71,12 @@ Open [http://localhost:8501](http://localhost:8501).
 ```
 PyFly/
 ├── pyfly/
-│   ├── app.py                  ← Streamlit landing page
+│   ├── app.py                  ← Streamlit entry point + navigation
 │   ├── pages/
-│   │   └── 1_Route_Map.py      ← Interactive map
+│   │   ├── 1_My_Routes.py      ← Personal travel map + Convert to Trip
+│   │   ├── 2_Route_Explorer.py ← Global route explorer (AENA / OpenFlights / OpenSky)
+│   │   ├── 3_Airport_Explorer.py ← Airport lookup map
+│   │   └── 5_My_Trips.py       ← Trip cards + Convert to Routes
 │   ├── sources/
 │   │   ├── base.py             ← FlightSource ABC + Scope enum + schema
 │   │   ├── aena.py             ← Live Playwright scraper (CLI only)

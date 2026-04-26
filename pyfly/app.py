@@ -28,9 +28,9 @@ def _home():
 
     st.markdown("""
 PyFly is a personal flight and travel tracker combined with a global route explorer.
-Log the routes you've flown, trained, sailed, or driven — then dive into scheduled
-and historical flight data from Spain's AENA network, the 2017 global baseline,
-or real-time OpenSky records.
+Log every route you've flown, trained, sailed, or driven — group them into trips,
+then dive into scheduled and historical flight data from Spain's AENA network,
+the 2017 global baseline, or real-time OpenSky records.
 """)
 
     st.markdown("---")
@@ -42,15 +42,31 @@ or real-time OpenSky records.
         st.markdown(
             "Log every route you've ever taken — flights, trains, boats, and car trips. "
             "Each leg is mapped as a great circle arc or ground line, thickened by how "
-            "many times you've done it. Filter by mode, share via URL, or export as JSON."
+            "many times you've done it. Colour by region, filter by mode, share via URL "
+            "or JSON."
         )
 
     with col2:
+        st.markdown("### 📖 My Trips")
+        st.markdown(
+            "Group routes into named trips with notes and a dedicated map. "
+            "Unlocked once you save your first trip from My Routes."
+        )
+
+    col3, col4 = st.columns(2)
+
+    with col3:
         st.markdown("### 🗺 Route Explorer")
         st.markdown(
-            "Browse global scheduled and historical flight routes. Explore the live AENA "
-            "Spanish network, the 2017 OpenFlights global baseline (3,400+ airports), or "
-            "actual flights from the OpenSky Network. Filter by country, airport, and airline."
+            "Browse global scheduled and historical flight routes. "
+            "AENA live network, 2017 OpenFlights baseline, or real-time OpenSky data."
+        )
+
+    with col4:
+        st.markdown("### 🛬 Airport Explorer")
+        st.markdown(
+            "Find airports worldwide on an interactive map. "
+            "Filter by type and country, look up IATA codes and coordinates."
         )
 
     st.markdown("---")
@@ -99,7 +115,7 @@ or real-time OpenSky records.
 
     st.markdown("---")
 
-    st.info("👈 Open **My Routes** from the sidebar to start logging your travels, or **Route Explorer** to browse the global network.")
+    st.info("👈 Open **My Routes** from the sidebar to start logging your travels, or **Route Explorer** to browse the global network. Save a trip in My Routes to unlock **My Trips**.")
 
     st.markdown(
         "<br><sub>Data sources: aena.es · OpenFlights · OpenSky Network · OurAirports · © OpenStreetMap contributors · © CARTO</sub>"
