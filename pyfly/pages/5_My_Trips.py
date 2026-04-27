@@ -24,16 +24,16 @@ st.set_page_config(
 st.markdown("""
 <style>
 @media (max-width: 640px) {
-    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) {
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="stColumn"]:nth-child(5)) {
         flex-wrap: nowrap !important;
         gap: 0.25rem !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) > div[data-testid="column"] {
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="stColumn"]:nth-child(5)) > div[data-testid="stColumn"] {
         min-width: 0 !important;
         flex: 1 1 0 !important;
         padding: 0 !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) button {
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="stColumn"]:nth-child(5)) button {
         padding: 0.15rem 0.1rem !important;
         font-size: 0.85rem !important;
     }
