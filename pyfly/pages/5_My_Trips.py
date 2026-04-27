@@ -18,6 +18,29 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Keep 5-button trip card rows horizontal on mobile.
+# Targets only stHorizontalBlock elements that have a 5th column child,
+# leaving all other column layouts (map/list split etc.) unaffected.
+st.markdown("""
+<style>
+@media (max-width: 640px) {
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) {
+        flex-wrap: nowrap !important;
+        gap: 0.25rem !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) > div[data-testid="column"] {
+        min-width: 0 !important;
+        flex: 1 1 0 !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(5)) button {
+        padding: 0.15rem 0.1rem !important;
+        font-size: 0.85rem !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 MODE_ICONS = {"plane": "✈", "train": "🚂", "boat": "⛴", "car": "🚗"}
 MODE_COLOUR = {
     "plane": [245, 158, 11, 200],
