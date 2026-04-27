@@ -162,6 +162,30 @@ def _filter_geojson(geojson: dict, visited: set[str], level: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Road routing (OSRM)
+# ---------------------------------------------------------------------------
+
+def _road_geometry(lat1: float, lon1: float, lat2: float, lon2: float) -> list[list[float]] | None:
+    """Return [[lon, lat], ...] road polyline from OSRM, or None on failure."""
+    key = (round(lat1, 4), round(lon1, 4), round(lat2, 4), round(lon2, 4))
+    if "road_cache" not in st.session_state:
+        st.session_state.road_cache = {}
+    cache = st.session_state.road_cache
+    if key in cache:
+        return cache[key]
+    try:
+        url = f"https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+        resp = httpx.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=8)
+        resp.raise_for_status()
+        coords = resp.json()["routes"][0]["geometry"]["coordinates"]
+        cache[key] = coords
+        return coords
+    except Exception:
+        cache[key] = None
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Map building
 # ---------------------------------------------------------------------------
 
@@ -190,14 +214,19 @@ def _build_map(routes: list[dict], region_layer=None) -> tuple[list, list]:
             c0, c1 = coords[i], coords[i + 1]
             if not c0 or not c1:
                 continue
-            row = {"origin_lat": c0[0], "origin_lon": c0[1],
-                   "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour}
             if mode == "plane":
-                arc_rows.append(row)
+                arc_rows.append({"origin_lat": c0[0], "origin_lon": c0[1],
+                                  "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour})
             elif mode == "car":
-                road_rows.append(row)
+                geom = _road_geometry(c0[0], c0[1], c1[0], c1[1])
+                if geom:
+                    road_rows.append({"path": geom, "colour": colour})
+                else:
+                    line_rows.append({"origin_lat": c0[0], "origin_lon": c0[1],
+                                      "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour})
             else:
-                line_rows.append(row)
+                line_rows.append({"origin_lat": c0[0], "origin_lon": c0[1],
+                                  "dest_lat": c1[0], "dest_lon": c1[1], "colour": colour})
 
         n_coords = len(coords)
         for i, c in enumerate(coords):
@@ -224,10 +253,9 @@ def _build_map(routes: list[dict], region_layer=None) -> tuple[list, list]:
             get_target_position=["dest_lon", "dest_lat"],
             get_color="colour", get_width=2, pickable=True))
     if road_rows:
-        layers.append(pdk.Layer("LineLayer", data=road_rows,
-            get_source_position=["origin_lon", "origin_lat"],
-            get_target_position=["dest_lon", "dest_lat"],
-            get_color="colour", get_width=2, pickable=True))
+        layers.append(pdk.Layer("PathLayer", data=road_rows,
+            get_path="path", get_color="colour",
+            get_width=2, width_min_pixels=2, pickable=True))
     if node_rows:
         layers.append(pdk.Layer("ScatterplotLayer", data=node_rows,
             get_position=["lon", "lat"],
