@@ -55,23 +55,36 @@ def _init_tables() -> None:
 
 
 def _hydrate_from_parquet() -> None:
-    """On cold start (empty routes table), load any committed parquet snapshots."""
-    con = _conn()
-    count = con.execute("SELECT COUNT(*) FROM routes").fetchone()[0]
-    if count > 0:
-        con.close()
-        return
+    """Load each committed parquet snapshot whose source is missing or older than its file.
 
+    Checked per source, not only on an empty table: Streamlit Cloud can keep pyfly.ddb
+    across redeploys, so a newly added source or a CI-refreshed snapshot must still load.
+    """
+    from datetime import datetime, timezone
+
+    con = _conn()
     for source, path in PARQUET_SOURCES.items():
-        if path.exists():
-            con.execute(f"""
-                INSERT INTO routes
-                SELECT *, {_UTC_NOW} AS scraped_at FROM read_parquet('{path.as_posix()}')
-            """)
-            loaded = con.execute(
-                "SELECT COUNT(*) FROM routes WHERE source = ?", [source]
-            ).fetchone()[0]
-            print(f"  db: hydrated {loaded} rows from {path.name}")
+        if not path.exists():
+            continue
+
+        loaded_at = con.execute(
+            "SELECT MAX(scraped_at) FROM routes WHERE source = ?", [source]
+        ).fetchone()[0]
+        file_time = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(tzinfo=None)
+        if loaded_at is not None and loaded_at >= file_time:
+            continue
+
+        con.execute("DELETE FROM routes WHERE source = ?", [source])
+        # Force source to the key so the DELETE above always matches what is inserted
+        con.execute(f"""
+            INSERT INTO routes
+            SELECT * REPLACE (?::VARCHAR AS source), {_UTC_NOW} AS scraped_at
+            FROM read_parquet('{path.as_posix()}')
+        """, [source])
+        loaded = con.execute(
+            "SELECT COUNT(*) FROM routes WHERE source = ?", [source]
+        ).fetchone()[0]
+        print(f"  db: hydrated {loaded} rows from {path.name}")
 
     con.close()
 
