@@ -32,6 +32,7 @@ SOURCE_INFO = {
     "ana": "Scraped from ANA Aeroportos de Portugal airport sites — current routes for 9 airports incl. Madeira and the Azores.",
     "avinor": "Scraped from avinor.no direct-routes pages — scheduled and charter routes for the 8 Avinor airports that publish them. No airline data.",
     "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
+    "swedavia": "Scraped from swedavia.com destination lists — scheduled and charter routes with airlines for Swedavia's 10 airports.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
@@ -89,6 +90,7 @@ DEFAULT_VIEWS = {
     # Mainland Norway; Svalbard (LYR, 78°N) is an airport filter away
     "avinor": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
     "avinor_feed": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
+    "swedavia": {"latitude": 61.0, "longitude": 16.0, "zoom": 3.9},
 }
 _FIT_WIDTH_PX = 900  # the map stretches to the page; assume a typical desktop width
 _FIT_PADDING = 1.6   # leave room around the airports for the arcs leaving them
@@ -159,6 +161,7 @@ with st.sidebar:
         "ANA Live (Portugal)": "ana",
         "Avinor Live (Norway)": "avinor",
         "Avinor Feed (Norway)": "avinor_feed",
+        "Swedavia Live (Sweden)": "swedavia",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -180,6 +183,7 @@ with st.sidebar:
             "ana": "uv run python -m pyfly --source ana --scope portugal",
             "avinor": "uv run python -m pyfly --source avinor --scope norway",
             "avinor_feed": "uv run python -m pyfly --source avinor_feed --scope norway",
+            "swedavia": "uv run python -m pyfly --source swedavia --scope sweden",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }

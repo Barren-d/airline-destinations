@@ -4,6 +4,7 @@ from .sources.aena import AENASource
 from .sources.ana import ANASource
 from .sources.avinor import AvinorSource
 from .sources.avinor_feed import AvinorFeedSource
+from .sources.swedavia import SwedaviaSource
 from .sources.openflights import OpenFlightsSource
 from .sources.opensky import OpenSkySource
 from .db import init_db, write_routes
@@ -13,6 +14,7 @@ SOURCES = {
     "ana": ANASource,
     "avinor": AvinorSource,
     "avinor_feed": AvinorFeedSource,
+    "swedavia": SwedaviaSource,
     "openflights": OpenFlightsSource,
     "opensky": OpenSkySource,
 }
