@@ -18,6 +18,7 @@ PARQUET_SOURCES = {
     "swedavia": DATA_DIR / "routes_swedavia.parquet",
     "isavia": DATA_DIR / "routes_isavia.parquet",
     "bts": DATA_DIR / "routes_bts.parquet",
+    "anac": DATA_DIR / "routes_anac.parquet",
     "openflights_2017": DATA_DIR / "routes_openflights.parquet",
     "openflights_global": DATA_DIR / "routes_openflights_global.parquet",
 }
@@ -25,7 +26,7 @@ PARQUET_SOURCES = {
 # Scraped sources also keep an append-only archive: data/history/<source>/<YYYY-MM-DD>.parquet,
 # one file per UTC day (a same-day rescrape replaces it). OpenFlights is static, so no history.
 HISTORY_DIR = DATA_DIR / "history"
-HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed", "swedavia", "isavia", "bts"}
+HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed", "swedavia", "isavia", "bts", "anac"}
 
 
 def snapshot_fingerprint() -> tuple:

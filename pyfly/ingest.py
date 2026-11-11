@@ -7,6 +7,7 @@ from .sources.avinor_feed import AvinorFeedSource
 from .sources.swedavia import SwedaviaSource
 from .sources.isavia import IsaviaSource
 from .sources.bts import BTSSource
+from .sources.anac import ANACSource
 from .sources.openflights import OpenFlightsSource
 from .sources.opensky import OpenSkySource
 from .db import init_db, write_routes
@@ -19,6 +20,7 @@ SOURCES = {
     "swedavia": SwedaviaSource,
     "isavia": IsaviaSource,
     "bts": BTSSource,
+    "anac": ANACSource,
     "openflights": OpenFlightsSource,
     "opensky": OpenSkySource,
 }

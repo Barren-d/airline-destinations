@@ -1,4 +1,4 @@
-name: Route scrape (AENA, ANA, Avinor, Swedavia, Isavia, BTS)
+name: Route scrape (AENA, ANA, Avinor, Swedavia, Isavia, BTS, ANAC)
 
 on:
   workflow_dispatch:        # manual only — trigger from the GitHub Actions tab ("Run workflow")
@@ -51,10 +51,14 @@ jobs:
         continue-on-error: true
         run: uv run python -m pyfly --source bts --scope usa
 
+      - name: Download ANAC VRA (Brazil)
+        continue-on-error: true
+        run: uv run python -m pyfly --source anac --scope brazil
+
       - name: Commit updated parquet snapshots
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/routes_aena.parquet data/routes_ana.parquet data/routes_avinor.parquet data/routes_avinor_feed.parquet data/routes_swedavia.parquet data/routes_isavia.parquet data/routes_bts.parquet data/history
+          git add data/routes_aena.parquet data/routes_ana.parquet data/routes_avinor.parquet data/routes_avinor_feed.parquet data/routes_swedavia.parquet data/routes_isavia.parquet data/routes_bts.parquet data/routes_anac.parquet data/history
           git diff --staged --quiet || git commit -m "data: route snapshots $(date -u +%Y-%m-%d)"
           git push

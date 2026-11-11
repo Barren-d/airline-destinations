@@ -36,6 +36,7 @@ SOURCE_INFO = {
     "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
     "swedavia": "Scraped from swedavia.com destination lists — scheduled and charter routes with airlines for Swedavia's 10 airports.",
     "isavia": "Scraped from innanlandsflugvellir.is — Iceland's domestic network (and Akureyri–Greenland) as listed by Isavia's domestic airports. Excludes Keflavík.",
+    "anac": "Brazil ANAC Voo Regular Ativo (VRA) — every scheduled passenger route flown at least weekly to, from or within Brazil in the month, Brazilian and foreign airlines. Cargo excluded. Published with a ~1–2 month lag.",
     "bts": "US DOT BTS T-100 Segment — every scheduled passenger route flown at least weekly to, from or within the US in the month, by operating carrier (regional partners such as SkyWest appear by name). Published with a ~3-month lag.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
@@ -102,6 +103,7 @@ DEFAULT_VIEWS = {
     "isavia": {"latitude": 66.6, "longitude": -20.0, "zoom": 4.5},
     # Contiguous US; Alaska, Hawaii and the territories are an airport filter away
     "bts": {"latitude": 37.5, "longitude": -96.0, "zoom": 3.4},
+    "anac": {"latitude": -14.0, "longitude": -50.0, "zoom": 3.4},
 }
 _FIT_WIDTH_PX = 900  # the map stretches to the page; assume a typical desktop width
 _FIT_PADDING = 1.6   # leave room around the airports for the arcs leaving them
@@ -135,7 +137,7 @@ def _view_for_airports(lats: list[float], lons: list[float]) -> pdk.ViewState:
 # Static datasets have no scrape date — their scraped_at is just when they were loaded.
 STATIC_SOURCES = {"openflights_global": "OpenFlights dataset, circa 2017 (static)"}
 # Monthly datasets: scraped_at is the first day of the month the data covers
-MONTHLY_SOURCES = {"bts"}
+MONTHLY_SOURCES = {"bts", "anac"}
 
 
 def _age_label(source: str) -> str:
@@ -180,6 +182,7 @@ with st.sidebar:
         "Swedavia Live (Sweden)": "swedavia",
         "Isavia Domestic (Iceland)": "isavia",
         "BTS T-100 (USA)": "bts",
+        "ANAC VRA (Brazil)": "anac",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -204,6 +207,7 @@ with st.sidebar:
             "swedavia": "uv run python -m pyfly --source swedavia --scope sweden",
             "isavia": "uv run python -m pyfly --source isavia --scope iceland",
             "bts": "uv run python -m pyfly --source bts --scope usa --backfill 12",
+            "anac": "uv run python -m pyfly --source anac --scope brazil --backfill 12",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
