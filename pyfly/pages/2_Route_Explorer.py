@@ -25,6 +25,7 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 SOURCE_INFO = {
     "aena": "Scraped from aena.es — current scheduled routes.",
+    "ana": "Scraped from ANA Aeroportos de Portugal airport sites — current routes for 9 airports incl. Madeira and the Azores.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
@@ -106,6 +107,7 @@ with st.sidebar:
     sky_ok = _opensky_available()
     source_options = {
         "AENA Live": "aena",
+        "ANA Live (Portugal)": "ana",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -127,6 +129,7 @@ with st.sidebar:
     if df.is_empty():
         cli_map = {
             "aena": "uv run python -m pyfly --source aena --scope aena",
+            "ana": "uv run python -m pyfly --source ana --scope portugal",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
@@ -213,7 +216,8 @@ with stats_slot:
     st.markdown(
         f"**Routes:** {len(filtered)}  \n"
         f"**Destinations:** {filtered['dest_iata'].n_unique()}  \n"
-        f"**Airlines:** {filtered['airline_iata'].n_unique()}"
+        # Scraped sources (AENA, ANA) only have airline_name; airline_iata is null.
+        f"**Airlines:** {filtered['airline_name'].drop_nulls().n_unique()}"
     )
 
 
@@ -262,7 +266,7 @@ arc_layer = pdk.Layer(
 
 tooltip = {
     "html": (
-        "<b>{dest_iata}</b><br/>"
+        "<b>{origin_iata} → {dest_iata}</b><br/>"
         "Airline: {airline_name}<br/>"
         "Source: {source}"
     ),

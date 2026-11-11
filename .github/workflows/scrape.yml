@@ -1,4 +1,4 @@
-name: AENA route scrape
+name: AENA + ANA route scrape
 
 on:
   schedule:
@@ -22,13 +22,20 @@ jobs:
       - name: Install Chromium for Playwright
         run: uv run playwright install chromium --with-deps
 
+      # Each scraper may fail independently (site changes, bot protection); the commit
+      # step still runs and picks up whichever snapshots were refreshed.
       - name: Run AENA scraper
+        continue-on-error: true
         run: uv run python -m pyfly --source aena --scope aena
 
-      - name: Commit updated parquet snapshot
+      - name: Run ANA (Portugal) scraper
+        continue-on-error: true
+        run: uv run python -m pyfly --source ana --scope portugal
+
+      - name: Commit updated parquet snapshots
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/routes_aena.parquet
-          git diff --staged --quiet || git commit -m "data: AENA route snapshot $(date -u +%Y-%m-%d)"
+          git add data/routes_aena.parquet data/routes_ana.parquet
+          git diff --staged --quiet || git commit -m "data: AENA + ANA route snapshots $(date -u +%Y-%m-%d)"
           git push

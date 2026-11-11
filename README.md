@@ -7,7 +7,7 @@ Map your personal travel history and explore the world's flight network.
 PyFly has four pages:
 - **My Routes** — log every route you've taken (flights, trains, boats, cars). Arcs thicken by how many times you've done the route, coloured by mode or region. Share via URL or export as JSON. Convert any selection into a trip.
 - **My Trips** — group routes into named trips with markdown notes. Collapsible cards, each with its own map and region colouring. Reorder, edit, delete, or convert a trip back into individual routes. Unlocked once you save your first trip.
-- **Route Explorer** — browse scheduled and historical flight routes as great circle arcs. Explore the live AENA Spanish network, a 2017 global baseline covering 3,400+ airports, or real-time OpenSky records.
+- **Route Explorer** — browse scheduled and historical flight routes as great circle arcs. Explore the live AENA Spanish network, the live ANA Portuguese network (incl. Madeira and the Azores), a 2017 global baseline covering 3,400+ airports, or real-time OpenSky records.
 - **Airport Explorer** — find airports worldwide on an interactive map. Filter by type and country, look up IATA codes and coordinates.
 
 ---
@@ -36,6 +36,7 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 | Source | What | Freshness | Auth |
 |---|---|---|---|
 | **AENA Live** | Current scheduled routes scraped from aena.es | Monthly (GitHub Actions) | None |
+| **ANA Live** | Current routes scraped from the 9 ANA Aeroportos de Portugal airport sites | Monthly (GitHub Actions) | None |
 | **Historical (2017)** | OpenFlights open dataset, pre-COVID baseline | Static | None |
 | **OpenSky** | Actual flights flown in the last 7 days | On demand, 24h cache | Free account |
 
@@ -49,7 +50,7 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 # Clone and install
 git clone <repo-url>
 cd PyFly
-uv sync --extra scraper      # includes Playwright for the AENA scraper
+uv sync --extra scraper      # includes Playwright for the AENA and ANA scrapers
 uv run playwright install chromium
 
 # Populate the database (uses committed parquet snapshots — no scrape needed)
@@ -74,12 +75,13 @@ PyFly/
 │   ├── app.py                  ← Streamlit entry point + navigation
 │   ├── pages/
 │   │   ├── 1_My_Routes.py      ← Personal travel map + Convert to Trip
-│   │   ├── 2_Route_Explorer.py ← Global route explorer (AENA / OpenFlights / OpenSky)
+│   │   ├── 2_Route_Explorer.py ← Global route explorer (AENA / ANA / OpenFlights / OpenSky)
 │   │   ├── 3_Airport_Explorer.py ← Airport lookup map
 │   │   └── 5_My_Trips.py       ← Trip cards + Convert to Routes
 │   ├── sources/
 │   │   ├── base.py             ← FlightSource ABC + Scope enum + schema
 │   │   ├── aena.py             ← Live Playwright scraper (CLI only)
+│   │   ├── ana.py              ← Live Playwright scraper for Portugal (CLI only)
 │   │   ├── openflights.py      ← Historical 2017 source
 │   │   └── opensky.py          ← OpenSky REST API + DuckDB cache
 │   ├── enrich.py               ← Coordinate + airline name enrichment
@@ -87,20 +89,23 @@ PyFly/
 │   ├── db.py                   ← DuckDB read/write + OpenSky cache
 │   └── exceptions.py           ← ScraperError, AuthError
 ├── config/
-│   └── airport_urls.json       ← All 43 AENA airports + their page URLs
+│   ├── airport_urls.json       ← All 43 AENA airports + their page URLs
+│   └── ana_destinations.json   ← ANA destination names → IATA (hand-reviewed)
 ├── data/
 │   ├── airports.csv            ← OurAirports (coordinates + IATA/ICAO mapping)
 │   ├── routes.dat              ← OpenFlights routes (~2017)
 │   ├── airlines.dat            ← OpenFlights airline names
 │   ├── routes_aena.parquet     ← Committed live snapshot (auto-updated by CI)
+│   ├── routes_ana.parquet      ← Committed live snapshot (auto-updated by CI)
 │   └── routes_openflights.parquet
 ├── tests/
 │   ├── test_aena.py
+│   ├── test_ana.py
 │   ├── test_openflights.py
 │   └── test_opensky.py
 ├── archive/                    ← Original 2022 scripts (reference only)
 └── .github/workflows/
-    └── scrape.yml              ← Daily AENA scrape + parquet commit
+    └── scrape.yml              ← Monthly AENA + ANA scrape + parquet commit
 ```
 
 ---
@@ -110,6 +115,10 @@ PyFly/
 ```bash
 # AENA live scrape (requires --extra scraper + Playwright)
 uv run python -m pyfly --source aena --scope aena
+
+# ANA (Portugal) live scrape — 9 airports; Beja has no scheduled flights.
+# Unknown destination names are logged and skipped: add them to config/ana_destinations.json
+uv run python -m pyfly --source ana --scope portugal
 
 # Historical data (no scraping, reads local files)
 uv run python -m pyfly --source openflights --scope aena
@@ -150,8 +159,8 @@ Results are cached in DuckDB for 24 hours per airport.
 The app reads from the committed parquet snapshots on cold start — no scraping
 needed in the cloud environment, and no Playwright dependency required.
 
-The GitHub Actions workflow (`.github/workflows/scrape.yml`) runs the AENA scraper
-on the 1st of each month at 04:00 UTC and commits the updated parquet back to the repo.
+The GitHub Actions workflow (`.github/workflows/scrape.yml`) runs the AENA and ANA scrapers
+on the 1st of each month at 04:00 UTC and commits the updated parquets back to the repo.
 Streamlit Cloud picks up the new commit automatically. It can also be triggered manually
 from the GitHub Actions tab.
 
@@ -182,7 +191,7 @@ Nothing else changes.
 
 ---
 
-*Data sources: [aena.es](https://www.aena.es) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
+*Data sources: [aena.es](https://www.aena.es) · [ANA Aeroportos de Portugal](https://www.ana.pt) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
 
 ---
 
@@ -197,8 +206,9 @@ Nothing else changes.
 | [CARTO](https://carto.com/legal/) Dark Matter basemap tiles | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | Must display "© CARTO" alongside OpenStreetMap attribution |
 | [OpenSky Network](https://opensky-network.org/about/terms-of-use) | Non-commercial research | Free-tier API use only; commercial use requires a separate agreement |
 | [AENA](https://www.aena.es) route schedules | Scraped from public pages | Factual timetable data; not redistributed — only aggregated route pairs are stored |
+| [ANA Aeroportos de Portugal](https://www.ana.pt) airline & destination listings | Scraped from public pages | Same as AENA — only aggregated route pairs and airline names are stored |
 
-This project is intended for **personal and educational use**. The committed AENA parquet snapshot contains only origin–destination pairs derived from publicly accessible schedule pages, not raw page content.
+This project is intended for **personal and educational use**. The committed AENA and ANA parquet snapshots contain only origin–destination pairs derived from publicly accessible schedule pages, not raw page content.
 
 ### Copyright
 

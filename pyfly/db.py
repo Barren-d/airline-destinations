@@ -12,6 +12,7 @@ _UTC_NOW = "(NOW() AT TIME ZONE 'UTC')"
 
 PARQUET_SOURCES = {
     "aena": DATA_DIR / "routes_aena.parquet",
+    "ana": DATA_DIR / "routes_ana.parquet",
     "openflights_2017": DATA_DIR / "routes_openflights.parquet",
     "openflights_global": DATA_DIR / "routes_openflights_global.parquet",
 }

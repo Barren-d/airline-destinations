@@ -1,12 +1,14 @@
 """Orchestrates fetch → write for a given source and scope."""
 from .sources.base import Scope
 from .sources.aena import AENASource
+from .sources.ana import ANASource
 from .sources.openflights import OpenFlightsSource
 from .sources.opensky import OpenSkySource
 from .db import init_db, write_routes
 
 SOURCES = {
     "aena": AENASource,
+    "ana": ANASource,
     "openflights": OpenFlightsSource,
     "opensky": OpenSkySource,
 }
