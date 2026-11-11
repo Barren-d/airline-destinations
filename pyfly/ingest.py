@@ -2,6 +2,8 @@
 from .sources.base import Scope
 from .sources.aena import AENASource
 from .sources.ana import ANASource
+from .sources.avinor import AvinorSource
+from .sources.avinor_feed import AvinorFeedSource
 from .sources.openflights import OpenFlightsSource
 from .sources.opensky import OpenSkySource
 from .db import init_db, write_routes
@@ -9,6 +11,8 @@ from .db import init_db, write_routes
 SOURCES = {
     "aena": AENASource,
     "ana": ANASource,
+    "avinor": AvinorSource,
+    "avinor_feed": AvinorFeedSource,
     "openflights": OpenFlightsSource,
     "opensky": OpenSkySource,
 }

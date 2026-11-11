@@ -37,6 +37,8 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 |---|---|---|---|
 | **AENA Live** | Current scheduled routes scraped from aena.es | Manual scrape (CLI or GitHub Actions) | None |
 | **ANA Live** | Current routes scraped from the 9 ANA Aeroportos de Portugal airport sites | Manual scrape (CLI or GitHub Actions) | None |
+| **Avinor Live** | Scheduled + charter routes from the avinor.no direct-routes pages (8 of Avinor's 43 airports publish one; no airlines) | Manual scrape (CLI or GitHub Actions) | None |
+| **Avinor Feed** | Every route flown from all 43 Avinor airports in the next 14 days, with airlines, from Avinor's open flight data feed | Manual scrape (CLI or GitHub Actions) | None |
 | **Historical (2017)** | OpenFlights open dataset, pre-COVID baseline | Static | None |
 | **OpenSky** | Actual flights flown in the last 7 days | On demand, 24h cache | Free account |
 
@@ -82,6 +84,8 @@ PyFly/
 │   │   ├── base.py             ← FlightSource ABC + Scope enum + schema
 │   │   ├── aena.py             ← Live Playwright scraper (CLI only)
 │   │   ├── ana.py              ← Live Playwright scraper for Portugal (CLI only)
+│   │   ├── avinor.py           ← avinor.no direct-routes pages, Norway (CLI only)
+│   │   ├── avinor_feed.py      ← Avinor open XML flight data feed, Norway (CLI only)
 │   │   ├── openflights.py      ← Historical 2017 source
 │   │   └── opensky.py          ← OpenSky REST API + DuckDB cache
 │   ├── enrich.py               ← Coordinate + airline name enrichment
@@ -103,6 +107,7 @@ PyFly/
 ├── tests/
 │   ├── test_aena.py
 │   ├── test_ana.py
+│   ├── test_avinor.py
 │   ├── test_history.py
 │   ├── test_openflights.py
 │   └── test_opensky.py
@@ -122,6 +127,11 @@ uv run python -m pyfly --source aena --scope aena
 # ANA (Portugal) live scrape — 9 airports; Beja has no scheduled flights.
 # Unknown destination names are logged and skipped: add them to config/ana_destinations.json
 uv run python -m pyfly --source ana --scope portugal
+
+# Avinor (Norway) — website route lists (8 airports, no airlines) and the open feed
+# (all 43 airports, next 14 days, with airlines). Plain HTTP, no Playwright needed.
+uv run python -m pyfly --source avinor --scope norway
+uv run python -m pyfly --source avinor_feed --scope norway
 
 # Historical data (no scraping, reads local files)
 uv run python -m pyfly --source openflights --scope aena
@@ -203,7 +213,7 @@ Nothing else changes.
 
 ---
 
-*Data sources: [aena.es](https://www.aena.es) · [ANA Aeroportos de Portugal](https://www.ana.pt) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
+*Data sources: [aena.es](https://www.aena.es) · [ANA Aeroportos de Portugal](https://www.ana.pt) · [Avinor](https://www.avinor.no) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
 
 ---
 
@@ -219,6 +229,8 @@ Nothing else changes.
 | [OpenSky Network](https://opensky-network.org/about/terms-of-use) | Non-commercial research | Free-tier API use only; commercial use requires a separate agreement |
 | [AENA](https://www.aena.es) route schedules | Scraped from public pages | Factual timetable data; not redistributed — only aggregated route pairs are stored |
 | [ANA Aeroportos de Portugal](https://www.ana.pt) airline & destination listings | Scraped from public pages | Same as AENA — only aggregated route pairs and airline names are stored |
+| [Avinor](https://www.avinor.no) direct-routes pages | Scraped from public pages | Same as AENA — only route pairs are stored |
+| [Avinor flight data](https://partner.avinor.no/en/services/flight-data/) XML feed | Offered by Avinor for reuse in other services | Fetched on manual scrapes only and cached as snapshots, as Avinor asks; only route pairs and airline names are stored |
 
 This project is intended for **personal and educational use**. The committed AENA and ANA parquet snapshots contain only origin–destination pairs derived from publicly accessible schedule pages, not raw page content.
 

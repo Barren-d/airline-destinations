@@ -13,6 +13,8 @@ _UTC_NOW = "(NOW() AT TIME ZONE 'UTC')"
 PARQUET_SOURCES = {
     "aena": DATA_DIR / "routes_aena.parquet",
     "ana": DATA_DIR / "routes_ana.parquet",
+    "avinor": DATA_DIR / "routes_avinor.parquet",
+    "avinor_feed": DATA_DIR / "routes_avinor_feed.parquet",
     "openflights_2017": DATA_DIR / "routes_openflights.parquet",
     "openflights_global": DATA_DIR / "routes_openflights_global.parquet",
 }
@@ -20,7 +22,7 @@ PARQUET_SOURCES = {
 # Scraped sources also keep an append-only archive: data/history/<source>/<YYYY-MM-DD>.parquet,
 # one file per UTC day (a same-day rescrape replaces it). OpenFlights is static, so no history.
 HISTORY_DIR = DATA_DIR / "history"
-HISTORY_SOURCES = {"aena", "ana"}
+HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed"}
 
 
 def _conn() -> duckdb.DuckDBPyConnection:

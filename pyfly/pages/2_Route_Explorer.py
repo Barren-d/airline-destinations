@@ -1,4 +1,5 @@
 """Route map page — interactive great circle visualisation."""
+import math
 import sys
 from pathlib import Path
 
@@ -29,6 +30,8 @@ DATA_DIR = Path(__file__).parent.parent.parent / "data"
 SOURCE_INFO = {
     "aena": "Scraped from aena.es — current scheduled routes.",
     "ana": "Scraped from ANA Aeroportos de Portugal airport sites — current routes for 9 airports incl. Madeira and the Azores.",
+    "avinor": "Scraped from avinor.no direct-routes pages — scheduled and charter routes for the 8 Avinor airports that publish them. No airline data.",
+    "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
@@ -75,15 +78,45 @@ def iso_to_country_name(iso: str) -> str:
     return c.name if c else iso
 
 
+MAP_HEIGHT_PX = 680
+
+# Default framing per source when no origin country/airport is selected. Fitting every
+# origin centres on the Atlantic between the mainland and the Canaries / Azores and makes
+# the mainland small, so frame the mainland; the islands are an airport filter away.
+DEFAULT_VIEWS = {
+    "aena": {"latitude": 40.0, "longitude": -4.0, "zoom": 4.9},
+    "ana": {"latitude": 38.0, "longitude": -14.5, "zoom": 4.3},
+    # Mainland Norway; Svalbard (LYR, 78°N) is an airport filter away
+    "avinor": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
+    "avinor_feed": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
+}
+_FIT_WIDTH_PX = 900  # the map stretches to the page; assume a typical desktop width
+_FIT_PADDING = 1.6   # leave room around the airports for the arcs leaving them
+
+
 def _view_for_airports(lats: list[float], lons: list[float]) -> pdk.ViewState:
-    """Return a ViewState centred on the bounding box of the given coordinates."""
+    """Return a ViewState that fits the given airports, in Web Mercator like the basemap."""
     if not lats:
         return pdk.ViewState(latitude=40.0, longitude=-4.5, zoom=5.0, pitch=25)
-    center_lat = (max(lats) + min(lats)) / 2
+
+    def merc_y(lat: float) -> float:
+        return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+
+    ys = [merc_y(lat) for lat in lats]
+    center_y = (max(ys) + min(ys)) / 2
+    center_lat = math.degrees(2 * math.atan(math.exp(center_y)) - math.pi / 2)
     center_lon = (max(lons) + min(lons)) / 2
-    span = max(max(lats) - min(lats), max(lons) - min(lons))
-    zoom = 7 if span < 5 else 5 if span < 15 else 4 if span < 40 else 3 if span < 80 else 2
-    return pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom, pitch=25)
+
+    # deck.gl uses 512px tiles: at zoom z the world is 512 * 2^z px wide.
+    # Pick the largest z where both spans fit.
+    lon_span = max(max(lons) - min(lons), 1e-6) * _FIT_PADDING
+    y_span = max(math.degrees(max(ys) - min(ys)), 1e-6) * _FIT_PADDING
+    zoom = min(
+        math.log2(_FIT_WIDTH_PX * 360 / (512 * lon_span)),
+        math.log2(MAP_HEIGHT_PX * 360 / (512 * y_span)),
+    )
+    zoom = max(1.5, min(zoom, 7.0))  # a single airport would otherwise zoom to street level
+    return pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=round(zoom, 2), pitch=25)
 
 
 # Static datasets have no scrape date — their scraped_at is just when they were loaded.
@@ -122,8 +155,10 @@ with st.sidebar:
     st.subheader("Data source")
     sky_ok = _opensky_available()
     source_options = {
-        "AENA Live": "aena",
+        "AENA Live (Spain)": "aena",
         "ANA Live (Portugal)": "ana",
+        "Avinor Live (Norway)": "avinor",
+        "Avinor Feed (Norway)": "avinor_feed",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -143,6 +178,8 @@ with st.sidebar:
         cli_map = {
             "aena": "uv run python -m pyfly --source aena --scope aena",
             "ana": "uv run python -m pyfly --source ana --scope portugal",
+            "avinor": "uv run python -m pyfly --source avinor --scope norway",
+            "avinor_feed": "uv run python -m pyfly --source avinor_feed --scope norway",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
@@ -224,6 +261,9 @@ def apply_filters(frame: pl.DataFrame) -> pl.DataFrame:
 
 
 filtered = apply_filters(df)
+# Fit the map to every matching origin, not just those that survive the arc cap below
+# (the cap keeps the first rows, e.g. only LIS/OPO/FAO for ANA, dropping Madeira and the Azores)
+view_origins = filtered.select(["origin_lat", "origin_lon"]).drop_nulls()
 
 capped = False
 if origin_filter == "All" and origin_country_filter == "All" and len(filtered) > max_arcs:
@@ -343,9 +383,10 @@ tooltip = {
     "style": {"backgroundColor": "#1a1a2e", "color": "white", "fontSize": "13px"},
 }
 
-origin_lats = filtered["origin_lat"].drop_nulls().to_list()
-origin_lons = filtered["origin_lon"].drop_nulls().to_list()
-view_state = _view_for_airports(origin_lats, origin_lons)
+if origin_filter == "All" and origin_country_filter == "All" and selected_source in DEFAULT_VIEWS:
+    view_state = pdk.ViewState(**DEFAULT_VIEWS[selected_source], pitch=25)
+else:
+    view_state = _view_for_airports(view_origins["origin_lat"].to_list(), view_origins["origin_lon"].to_list())
 
 st.pydeck_chart(
     pdk.Deck(
@@ -354,7 +395,7 @@ st.pydeck_chart(
         tooltip=tooltip,
         map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     ),
-    height=680,
+    height=MAP_HEIGHT_PX,
     width="stretch",
 )
 
