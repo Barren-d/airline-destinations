@@ -7,6 +7,8 @@ import polars as pl
 DB_PATH = Path(__file__).parent.parent / "data" / "pyfly.ddb"
 DATA_DIR = Path(__file__).parent.parent / "data"
 CACHE_TTL_HOURS = 24
+# DuckDB's NOW() is session-local; store naive UTC so get_data_age can compare against UTC.
+_UTC_NOW = "(NOW() AT TIME ZONE 'UTC')"
 
 PARQUET_SOURCES = {
     "aena": DATA_DIR / "routes_aena.parquet",
@@ -33,12 +35,12 @@ def init_db() -> None:
 
 def _init_tables() -> None:
     con = _conn()
-    con.execute("""
+    con.execute(f"""
         CREATE TABLE IF NOT EXISTS routes (
             origin_iata VARCHAR, origin_lat DOUBLE, origin_lon DOUBLE,
             dest_iata   VARCHAR, dest_lat   DOUBLE, dest_lon   DOUBLE,
             airline_iata VARCHAR, airline_name VARCHAR,
-            source       VARCHAR, scraped_at TIMESTAMP DEFAULT NOW()
+            source       VARCHAR, scraped_at TIMESTAMP DEFAULT {_UTC_NOW}
         )
     """)
     con.execute("""
@@ -63,7 +65,7 @@ def _hydrate_from_parquet() -> None:
         if path.exists():
             con.execute(f"""
                 INSERT INTO routes
-                SELECT *, NOW() AS scraped_at FROM read_parquet('{path.as_posix()}')
+                SELECT *, {_UTC_NOW} AS scraped_at FROM read_parquet('{path.as_posix()}')
             """)
             loaded = con.execute(
                 "SELECT COUNT(*) FROM routes WHERE source = ?", [source]
@@ -78,7 +80,7 @@ def write_routes(df: pl.DataFrame, source: str) -> None:
     con.execute("DELETE FROM routes WHERE source = ?", [source])
     # Register the polars df as a DuckDB view so we can INSERT from it
     con.register("_incoming", df.to_arrow())
-    con.execute("INSERT INTO routes SELECT *, NOW() FROM _incoming")
+    con.execute(f"INSERT INTO routes SELECT *, {_UTC_NOW} FROM _incoming")
     con.unregister("_incoming")
     con.close()
 
@@ -152,10 +154,10 @@ def _records_to_df(records: list[dict]) -> pl.DataFrame | None:
 
 def write_cache(airport_icao: str, records: list[dict]) -> None:
     con = _conn()
-    con.execute("""
+    con.execute(f"""
         INSERT INTO opensky_cache (airport_icao, fetched_at, data)
-        VALUES (?, NOW(), ?)
+        VALUES (?, {_UTC_NOW}, ?)
         ON CONFLICT (airport_icao) DO UPDATE
-            SET fetched_at = NOW(), data = EXCLUDED.data
+            SET fetched_at = {_UTC_NOW}, data = EXCLUDED.data
     """, [airport_icao, json.dumps(records)])
     con.close()
