@@ -36,6 +36,7 @@ SOURCE_INFO = {
     "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
     "swedavia": "Scraped from swedavia.com destination lists — scheduled and charter routes with airlines for Swedavia's 10 airports.",
     "isavia": "Scraped from innanlandsflugvellir.is — Iceland's domestic network (and Akureyri–Greenland) as listed by Isavia's domestic airports. Excludes Keflavík.",
+    "bts": "US DOT BTS T-100 Segment — every scheduled passenger route flown at least weekly to, from or within the US in the month, by operating carrier (regional partners such as SkyWest appear by name). Published with a ~3-month lag.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
@@ -99,6 +100,8 @@ DEFAULT_VIEWS = {
     "swedavia": {"latitude": 61.0, "longitude": 16.0, "zoom": 3.9},
     # Iceland, with room to the west for Akureyri–Nerlerit Inaat (Greenland)
     "isavia": {"latitude": 66.6, "longitude": -20.0, "zoom": 4.5},
+    # Contiguous US; Alaska, Hawaii and the territories are an airport filter away
+    "bts": {"latitude": 37.5, "longitude": -96.0, "zoom": 3.4},
 }
 _FIT_WIDTH_PX = 900  # the map stretches to the page; assume a typical desktop width
 _FIT_PADDING = 1.6   # leave room around the airports for the arcs leaving them
@@ -131,6 +134,8 @@ def _view_for_airports(lats: list[float], lons: list[float]) -> pdk.ViewState:
 
 # Static datasets have no scrape date — their scraped_at is just when they were loaded.
 STATIC_SOURCES = {"openflights_global": "OpenFlights dataset, circa 2017 (static)"}
+# Monthly datasets: scraped_at is the first day of the month the data covers
+MONTHLY_SOURCES = {"bts"}
 
 
 def _age_label(source: str) -> str:
@@ -139,6 +144,8 @@ def _age_label(source: str) -> str:
     ts = last_scraped(source, SNAPSHOTS)
     if ts is None:
         return "no data"
+    if source in MONTHLY_SOURCES:
+        return f"routes flown in {ts:%B %Y}"
     age = datetime.now(timezone.utc) - ts
     if source == "opensky":  # 24h API cache — freshness is measured in hours
         return f"fetched {age.total_seconds() / 3600:.0f}h ago"
@@ -172,6 +179,7 @@ with st.sidebar:
         "Avinor Feed (Norway)": "avinor_feed",
         "Swedavia Live (Sweden)": "swedavia",
         "Isavia Domestic (Iceland)": "isavia",
+        "BTS T-100 (USA)": "bts",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -195,6 +203,7 @@ with st.sidebar:
             "avinor_feed": "uv run python -m pyfly --source avinor_feed --scope norway",
             "swedavia": "uv run python -m pyfly --source swedavia --scope sweden",
             "isavia": "uv run python -m pyfly --source isavia --scope iceland",
+            "bts": "uv run python -m pyfly --source bts --scope usa --backfill 12",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
@@ -331,8 +340,9 @@ def render_changes() -> None:
 
     added = _route_summary(apply_filters(changes.added))
     dropped = _route_summary(apply_filters(changes.dropped))
+    fmt = "%B %Y" if selected_source in MONTHLY_SOURCES else "%d %b %Y"
     st.caption(
-        f"{changes.previous:%d %b %Y} → {changes.latest:%d %b %Y}, for the current filters. "
+        f"{changes.previous:{fmt}} → {changes.latest:{fmt}}, for the current filters. "
         "A route counts as new or dropped when no airline flew it in the other scrape."
     )
     c1, c2 = st.columns(2)
@@ -350,7 +360,9 @@ def render_changes() -> None:
 # ---------------------------------------------------------------------------
 
 scraped = last_scraped(selected_source, SNAPSHOTS)
-if scraped is not None and selected_source not in STATIC_SOURCES:
+if scraped is not None and selected_source in MONTHLY_SOURCES:
+    st.caption(f"Routes flown in {scraped:%B %Y} (the latest month published).")
+elif scraped is not None and selected_source not in STATIC_SOURCES:
     st.caption(f"Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
 
 if capped:

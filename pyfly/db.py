@@ -17,6 +17,7 @@ PARQUET_SOURCES = {
     "avinor_feed": DATA_DIR / "routes_avinor_feed.parquet",
     "swedavia": DATA_DIR / "routes_swedavia.parquet",
     "isavia": DATA_DIR / "routes_isavia.parquet",
+    "bts": DATA_DIR / "routes_bts.parquet",
     "openflights_2017": DATA_DIR / "routes_openflights.parquet",
     "openflights_global": DATA_DIR / "routes_openflights_global.parquet",
 }
@@ -24,7 +25,7 @@ PARQUET_SOURCES = {
 # Scraped sources also keep an append-only archive: data/history/<source>/<YYYY-MM-DD>.parquet,
 # one file per UTC day (a same-day rescrape replaces it). OpenFlights is static, so no history.
 HISTORY_DIR = DATA_DIR / "history"
-HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed", "swedavia", "isavia"}
+HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed", "swedavia", "isavia", "bts"}
 
 
 def snapshot_fingerprint() -> tuple:
@@ -125,13 +126,26 @@ def _hydrate_from_parquet() -> None:
     con.close()
 
 
-def write_routes(df: pl.DataFrame, source: str) -> None:
+def write_routes(df: pl.DataFrame, source: str, snapshot: bool = True) -> None:
+    """Store a scrape in DuckDB + the parquet snapshot, and archive it for history sources.
+
+    snapshot=False only archives (used to backfill older periods without replacing the latest).
+    A source whose data covers a period rather than a scrape time (BTS T-100: one month) sets
+    scraped_at itself; otherwise it is the current UTC time.
+    """
     from datetime import datetime, timezone
 
-    # One UTC timestamp for the whole scrape, stored in DuckDB and in the parquet snapshot
-    # so a cold start can show when the data was actually scraped.
-    scraped_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    df = df.with_columns(pl.lit(scraped_at).alias("scraped_at"))
+    if "scraped_at" in df.columns:
+        scraped_at = df["scraped_at"].max()
+    else:
+        # One UTC timestamp for the whole scrape, stored in DuckDB and in the parquet snapshot
+        # so a cold start can show when the data was actually scraped.
+        scraped_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        df = df.with_columns(pl.lit(scraped_at).alias("scraped_at"))
+
+    if not snapshot:
+        _archive(df, source, scraped_at)
+        return
 
     con = _conn()
     con.execute("DELETE FROM routes WHERE source = ?", [source])
@@ -147,6 +161,10 @@ def write_routes(df: pl.DataFrame, source: str) -> None:
         df.write_parquet(parquet_path)
         print(f"  db: wrote {len(df)} rows to {parquet_path.name}")
 
+    _archive(df, source, scraped_at)
+
+
+def _archive(df: pl.DataFrame, source: str, scraped_at) -> None:
     if source in HISTORY_SOURCES:
         archive = HISTORY_DIR / source / f"{scraped_at:%Y-%m-%d}.parquet"
         archive.parent.mkdir(parents=True, exist_ok=True)
