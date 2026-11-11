@@ -14,7 +14,9 @@ import streamlit as st
 
 from datetime import datetime, timezone
 
-from pyfly.db import HISTORY_SOURCES, get_last_scraped as _db_last_scraped, init_db, read_routes
+from pyfly.db import (
+    HISTORY_SOURCES, get_last_scraped as _db_last_scraped, init_db, read_routes, snapshot_fingerprint,
+)
 from pyfly.history import RouteChanges, route_changes
 from pyfly.sources.opensky import OpenSkySource
 
@@ -38,24 +40,27 @@ SOURCE_INFO = {
 }
 
 
+# All data caches take the snapshot fingerprint as an argument, so new or changed parquet
+# files (a push applied in the same process) re-hydrate DuckDB and invalidate cached reads.
+# (No leading underscore: Streamlit leaves _-prefixed arguments out of the cache key.)
 @st.cache_resource
-def _ensure_db() -> None:
+def _ensure_db(fingerprint: tuple) -> None:
     """Create tables and hydrate from parquet before anything queries DuckDB."""
     init_db()
 
 
 @st.cache_data(ttl=300)
-def load_data(source: str) -> pl.DataFrame:
+def load_data(source: str, fingerprint: tuple) -> pl.DataFrame:
     return read_routes(source=source)
 
 
 @st.cache_data(ttl=300)
-def last_scraped(source: str) -> datetime | None:
+def last_scraped(source: str, fingerprint: tuple) -> datetime | None:
     return _db_last_scraped(source)
 
 
 @st.cache_data(ttl=300)
-def changes_since_previous(source: str) -> RouteChanges | None:
+def changes_since_previous(source: str, fingerprint: tuple) -> RouteChanges | None:
     return route_changes(source)
 
 
@@ -128,7 +133,7 @@ STATIC_SOURCES = {"openflights_global": "OpenFlights dataset, circa 2017 (static
 def _age_label(source: str) -> str:
     if source in STATIC_SOURCES:
         return STATIC_SOURCES[source]
-    ts = last_scraped(source)
+    ts = last_scraped(source, SNAPSHOTS)
     if ts is None:
         return "no data"
     age = datetime.now(timezone.utc) - ts
@@ -151,7 +156,8 @@ def _opensky_available() -> bool:
 # Sidebar
 # ---------------------------------------------------------------------------
 
-_ensure_db()
+SNAPSHOTS = snapshot_fingerprint()
+_ensure_db(SNAPSHOTS)
 
 with st.sidebar:
     st.subheader("Data source")
@@ -175,7 +181,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    df = load_data(selected_source)
+    df = load_data(selected_source, SNAPSHOTS)
 
     if df.is_empty():
         cli_map = {
@@ -313,7 +319,7 @@ def render_changes() -> None:
         return
     st.markdown("---")
     st.subheader("Changes since previous scrape")
-    changes = changes_since_previous(selected_source)
+    changes = changes_since_previous(selected_source, SNAPSHOTS)
     if changes is None:
         st.caption("History starts with the latest scrape — changes will appear after the next one.")
         return
@@ -338,7 +344,7 @@ def render_changes() -> None:
 # Map
 # ---------------------------------------------------------------------------
 
-scraped = last_scraped(selected_source)
+scraped = last_scraped(selected_source, SNAPSHOTS)
 if scraped is not None and selected_source not in STATIC_SOURCES:
     st.caption(f"Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
 

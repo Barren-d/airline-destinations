@@ -26,6 +26,17 @@ HISTORY_DIR = DATA_DIR / "history"
 HISTORY_SOURCES = {"aena", "ana", "avinor", "avinor_feed", "swedavia"}
 
 
+def snapshot_fingerprint() -> tuple:
+    """Cheap signature of the committed snapshots and history files (path, mtime, size).
+
+    The app keys its caches on this: Streamlit Cloud can apply a push by rerunning in the same
+    process, where a cache keyed only on function code would never load new or changed snapshots.
+    """
+    paths = [p for p in PARQUET_SOURCES.values() if p.exists()]
+    paths += sorted(HISTORY_DIR.glob("*/*.parquet")) if HISTORY_DIR.exists() else []
+    return tuple((p.as_posix(), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+
+
 def _conn() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(DB_PATH))
 
