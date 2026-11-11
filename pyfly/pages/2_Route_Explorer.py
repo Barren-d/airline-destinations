@@ -30,9 +30,14 @@ SOURCE_INFO = {
 }
 
 
+@st.cache_resource
+def _ensure_db() -> None:
+    """Create tables and hydrate from parquet before anything queries DuckDB."""
+    init_db()
+
+
 @st.cache_data(ttl=300)
 def load_data(source: str) -> pl.DataFrame:
-    init_db()
     return read_routes(source=source)
 
 
@@ -93,6 +98,8 @@ def _opensky_available() -> bool:
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
+
+_ensure_db()
 
 with st.sidebar:
     st.subheader("Data source")
