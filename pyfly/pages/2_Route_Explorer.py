@@ -35,6 +35,7 @@ SOURCE_INFO = {
     "avinor": "Scraped from avinor.no direct-routes pages — scheduled and charter routes for the 8 Avinor airports that publish them. No airline data.",
     "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
     "swedavia": "Scraped from swedavia.com destination lists — scheduled and charter routes with airlines for Swedavia's 10 airports.",
+    "isavia": "Scraped from innanlandsflugvellir.is — Iceland's domestic network (and Akureyri–Greenland) as listed by Isavia's domestic airports. Excludes Keflavík.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
     "opensky": "OpenSky Network — actual flights flown in the last 7 days.",
 }
@@ -96,6 +97,8 @@ DEFAULT_VIEWS = {
     "avinor": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
     "avinor_feed": {"latitude": 63.0, "longitude": 12.5, "zoom": 3.75},
     "swedavia": {"latitude": 61.0, "longitude": 16.0, "zoom": 3.9},
+    # Iceland, with room to the west for Akureyri–Nerlerit Inaat (Greenland)
+    "isavia": {"latitude": 66.6, "longitude": -20.0, "zoom": 4.5},
 }
 _FIT_WIDTH_PX = 900  # the map stretches to the page; assume a typical desktop width
 _FIT_PADDING = 1.6   # leave room around the airports for the arcs leaving them
@@ -168,6 +171,7 @@ with st.sidebar:
         "Avinor Live (Norway)": "avinor",
         "Avinor Feed (Norway)": "avinor_feed",
         "Swedavia Live (Sweden)": "swedavia",
+        "Isavia Domestic (Iceland)": "isavia",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
@@ -190,6 +194,7 @@ with st.sidebar:
             "avinor": "uv run python -m pyfly --source avinor --scope norway",
             "avinor_feed": "uv run python -m pyfly --source avinor_feed --scope norway",
             "swedavia": "uv run python -m pyfly --source swedavia --scope sweden",
+            "isavia": "uv run python -m pyfly --source isavia --scope iceland",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
