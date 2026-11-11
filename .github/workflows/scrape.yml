@@ -1,9 +1,7 @@
 name: AENA + ANA route scrape
 
 on:
-  schedule:
-    - cron: '0 4 1 * *'   # 04:00 UTC on the 1st of each month
-  workflow_dispatch:        # allow manual trigger from GitHub UI
+  workflow_dispatch:        # manual only — trigger from the GitHub Actions tab ("Run workflow")
 
 jobs:
   scrape:
@@ -36,6 +34,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/routes_aena.parquet data/routes_ana.parquet
+          git add data/routes_aena.parquet data/routes_ana.parquet data/history
           git diff --staged --quiet || git commit -m "data: AENA + ANA route snapshots $(date -u +%Y-%m-%d)"
           git push

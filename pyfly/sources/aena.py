@@ -64,7 +64,11 @@ class AENASource(FlightSource):
 
         airports = load_airports()
         airlines = load_airlines()
-        return enrich(raw_df, airports, airlines, source="aena")
+        # Different destination labels can resolve to the same airport, so the same
+        # airline/route can appear twice after enrichment.
+        return enrich(raw_df, airports, airlines, source="aena").unique(
+            subset=["origin_iata", "dest_iata", "airline_name"], maintain_order=True
+        )
 
     def _load_config(self) -> dict[str, str]:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))

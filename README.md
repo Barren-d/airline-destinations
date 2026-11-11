@@ -35,8 +35,8 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 
 | Source | What | Freshness | Auth |
 |---|---|---|---|
-| **AENA Live** | Current scheduled routes scraped from aena.es | Monthly (GitHub Actions) | None |
-| **ANA Live** | Current routes scraped from the 9 ANA Aeroportos de Portugal airport sites | Monthly (GitHub Actions) | None |
+| **AENA Live** | Current scheduled routes scraped from aena.es | Manual scrape (CLI or GitHub Actions) | None |
+| **ANA Live** | Current routes scraped from the 9 ANA Aeroportos de Portugal airport sites | Manual scrape (CLI or GitHub Actions) | None |
 | **Historical (2017)** | OpenFlights open dataset, pre-COVID baseline | Static | None |
 | **OpenSky** | Actual flights flown in the last 7 days | On demand, 24h cache | Free account |
 
@@ -87,6 +87,7 @@ PyFly/
 │   ├── enrich.py               ← Coordinate + airline name enrichment
 │   ├── ingest.py               ← Fetch → enrich → write pipeline
 │   ├── db.py                   ← DuckDB read/write + OpenSky cache
+│   ├── history.py              ← Scrape archive: compare snapshots
 │   └── exceptions.py           ← ScraperError, AuthError
 ├── config/
 │   ├── airport_urls.json       ← All 43 AENA airports + their page URLs
@@ -95,17 +96,19 @@ PyFly/
 │   ├── airports.csv            ← OurAirports (coordinates + IATA/ICAO mapping)
 │   ├── routes.dat              ← OpenFlights routes (~2017)
 │   ├── airlines.dat            ← OpenFlights airline names
-│   ├── routes_aena.parquet     ← Committed live snapshot (auto-updated by CI)
-│   ├── routes_ana.parquet      ← Committed live snapshot (auto-updated by CI)
+│   ├── routes_aena.parquet     ← Committed live snapshot (updated by each scrape)
+│   ├── routes_ana.parquet      ← Committed live snapshot (updated by each scrape)
+│   ├── history/<source>/<date>.parquet ← Every AENA/ANA scrape, kept for change tracking
 │   └── routes_openflights.parquet
 ├── tests/
 │   ├── test_aena.py
 │   ├── test_ana.py
+│   ├── test_history.py
 │   ├── test_openflights.py
 │   └── test_opensky.py
 ├── archive/                    ← Original 2022 scripts (reference only)
 └── .github/workflows/
-    └── scrape.yml              ← Monthly AENA + ANA scrape + parquet commit
+    └── scrape.yml              ← Manually triggered AENA + ANA scrape + parquet commit
 ```
 
 ---
@@ -159,10 +162,19 @@ Results are cached in DuckDB for 24 hours per airport.
 The app reads from the committed parquet snapshots on cold start — no scraping
 needed in the cloud environment, and no Playwright dependency required.
 
-The GitHub Actions workflow (`.github/workflows/scrape.yml`) runs the AENA and ANA scrapers
-on the 1st of each month at 04:00 UTC and commits the updated parquets back to the repo.
-Streamlit Cloud picks up the new commit automatically. It can also be triggered manually
-from the GitHub Actions tab.
+Scrapes are triggered manually — either locally with the CLI (then commit the updated
+parquets), or from the GitHub Actions tab ("Run workflow" on `.github/workflows/scrape.yml`),
+which runs the AENA and ANA scrapers and commits the updated parquets back to the repo.
+Streamlit Cloud picks up the new commit automatically.
+
+Each scrape records its UTC time in the snapshot, which Route Explorer shows as "scraped on".
+AENA and ANA scrapes are also archived to `data/history/<source>/<YYYY-MM-DD>.parquet`
+(a same-day rescrape replaces that day's file), and Route Explorer lists the routes added
+and dropped since the previous scrape. Query the full archive with DuckDB:
+
+```sql
+SELECT * FROM read_parquet('data/history/aena/*.parquet');
+```
 
 ---
 

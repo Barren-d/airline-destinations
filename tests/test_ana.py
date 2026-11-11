@@ -87,5 +87,12 @@ def test_ana_no_duplicate_routes(ana_df):
     assert ana_df.select(key).is_duplicated().sum() == 0
 
 
+def test_ana_snapshot_has_scrape_date():
+    # The app shows this date on cold start; without it the "last scraped" label is wrong
+    snapshot = pl.read_parquet("data/routes_ana.parquet")
+    assert "scraped_at" in snapshot.columns
+    assert snapshot["scraped_at"].null_count() == 0
+
+
 def test_ana_source_tag(ana_df):
     assert ana_df["source"].unique().to_list() == ["ana"]

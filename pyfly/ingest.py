@@ -47,4 +47,5 @@ def run(source_name: str, scope: Scope, custom_iata: set[str] | None = None) -> 
 
     print(f"Done. {len(df)} routes, "
           f"{df['dest_iata'].n_unique()} destinations, "
-          f"{df['airline_iata'].n_unique()} airlines.")
+          # Scraped sources only have airline_name; airline_iata is null.
+          f"{df['airline_name'].drop_nulls().n_unique()} airlines.")

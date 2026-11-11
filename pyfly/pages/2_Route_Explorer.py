@@ -11,7 +11,10 @@ import polars as pl
 import pydeck as pdk
 import streamlit as st
 
-from pyfly.db import get_data_age as _db_age, init_db, read_routes
+from datetime import datetime, timezone
+
+from pyfly.db import HISTORY_SOURCES, get_last_scraped as _db_last_scraped, init_db, read_routes
+from pyfly.history import RouteChanges, route_changes
 from pyfly.sources.opensky import OpenSkySource
 
 st.set_page_config(
@@ -43,8 +46,13 @@ def load_data(source: str) -> pl.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def data_age_hours(source: str) -> float | None:
-    return _db_age(source)
+def last_scraped(source: str) -> datetime | None:
+    return _db_last_scraped(source)
+
+
+@st.cache_data(ttl=300)
+def changes_since_previous(source: str) -> RouteChanges | None:
+    return route_changes(source)
 
 
 @st.cache_data
@@ -78,15 +86,23 @@ def _view_for_airports(lats: list[float], lons: list[float]) -> pdk.ViewState:
     return pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=zoom, pitch=25)
 
 
+# Static datasets have no scrape date — their scraped_at is just when they were loaded.
+STATIC_SOURCES = {"openflights_global": "OpenFlights dataset, circa 2017 (static)"}
+
+
 def _age_label(source: str) -> str:
-    age = data_age_hours(source)
-    if age is None:
+    if source in STATIC_SOURCES:
+        return STATIC_SOURCES[source]
+    ts = last_scraped(source)
+    if ts is None:
         return "no data"
-    if age < 6:
-        return f"✅ {age:.0f}h ago"
-    if age < 24:
-        return f"🟡 {age:.0f}h ago"
-    return f"🔴 {age:.0f}h ago"
+    age = datetime.now(timezone.utc) - ts
+    if source == "opensky":  # 24h API cache — freshness is measured in hours
+        return f"fetched {age.total_seconds() / 3600:.0f}h ago"
+    # Scrapes are triggered manually, so show the date rather than judging freshness
+    days = age.days
+    ago = "today" if days == 0 else "1 day ago" if days == 1 else f"{days} days ago"
+    return f"scraped {ts:%d %b %Y} ({ago})"
 
 
 def _opensky_available() -> bool:
@@ -117,10 +133,7 @@ with st.sidebar:
     if selected_source == "opensky" and not sky_ok:
         st.warning("Set OPENSKY_USERNAME and OPENSKY_PASSWORD in .env to enable OpenSky.")
 
-    st.caption(f"Data age: {_age_label(selected_source)}")
-    if st.button("↻ Refresh", help="Clear cache and re-read from DuckDB"):
-        st.cache_data.clear()
-        st.rerun()
+    st.caption(f"Data: {_age_label(selected_source)}")
 
     st.markdown("---")
 
@@ -191,21 +204,26 @@ with st.sidebar:
 # Filtering
 # ---------------------------------------------------------------------------
 
-filtered = df
+def apply_filters(frame: pl.DataFrame) -> pl.DataFrame:
+    """Apply the sidebar filters — shared by the map and the changes-since-last-scrape view."""
+    if origin_country_filter != "All" and cmap:
+        in_origin_country = {k for k, v in cmap.items() if v == origin_country_filter}
+        frame = frame.filter(pl.col("origin_iata").is_in(in_origin_country))
 
-if origin_country_filter != "All" and cmap:
-    in_origin_country = {k for k, v in cmap.items() if v == origin_country_filter}
-    filtered = filtered.filter(pl.col("origin_iata").is_in(in_origin_country))
+    if origin_filter != "All":
+        frame = frame.filter(pl.col("origin_iata") == origin_filter)
 
-if origin_filter != "All":
-    filtered = filtered.filter(pl.col("origin_iata") == origin_filter)
+    if airline_filter != "All":
+        frame = frame.filter(pl.col("airline_name") == airline_filter)
 
-if airline_filter != "All":
-    filtered = filtered.filter(pl.col("airline_name") == airline_filter)
+    if dest_country_filter != "All" and cmap:
+        in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
+        frame = frame.filter(pl.col("dest_iata").is_in(in_dest_country))
 
-if dest_country_filter != "All" and cmap:
-    in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
-    filtered = filtered.filter(pl.col("dest_iata").is_in(in_dest_country))
+    return frame
+
+
+filtered = apply_filters(df)
 
 capped = False
 if origin_filter == "All" and origin_country_filter == "All" and len(filtered) > max_arcs:
@@ -222,18 +240,70 @@ with stats_slot:
 
 
 # ---------------------------------------------------------------------------
+# Changes since previous scrape
+# ---------------------------------------------------------------------------
+
+def _route_summary(frame: pl.DataFrame) -> pl.DataFrame:
+    """One row per origin→destination with readable airport names and its airlines."""
+    def name(iata: str) -> str:
+        return f"{alookup[iata]['name']} ({iata})" if iata in alookup else iata
+
+    def country(iata: str) -> str:
+        return iso_to_country_name(cmap[iata]) if iata in cmap else ""
+
+    return (
+        frame.group_by(["origin_iata", "dest_iata"])
+        .agg(pl.col("airline_name").drop_nulls().unique().sort().str.join(", ").alias("Airlines"))
+        .sort(["origin_iata", "dest_iata"])
+        .with_columns(
+            pl.col("origin_iata").map_elements(name, return_dtype=pl.Utf8).alias("From"),
+            pl.col("dest_iata").map_elements(name, return_dtype=pl.Utf8).alias("To"),
+            pl.col("dest_iata").map_elements(country, return_dtype=pl.Utf8).alias("Country"),
+        )
+        .select(["From", "To", "Country", "Airlines"])
+    )
+
+
+def render_changes() -> None:
+    if selected_source not in HISTORY_SOURCES:
+        return
+    st.markdown("---")
+    st.subheader("Changes since previous scrape")
+    changes = changes_since_previous(selected_source)
+    if changes is None:
+        st.caption("History starts with the latest scrape — changes will appear after the next one.")
+        return
+
+    added = _route_summary(apply_filters(changes.added))
+    dropped = _route_summary(apply_filters(changes.dropped))
+    st.caption(
+        f"{changes.previous:%d %b %Y} → {changes.latest:%d %b %Y}, for the current filters. "
+        "A route counts as new or dropped when no airline flew it in the other scrape."
+    )
+    c1, c2 = st.columns(2)
+    c1.metric("New routes", len(added))
+    c2.metric("Dropped routes", len(dropped))
+    tab_added, tab_dropped = st.tabs([f"New ({len(added)})", f"Dropped ({len(dropped)})"])
+    with tab_added:
+        st.dataframe(added, hide_index=True, width="stretch")
+    with tab_dropped:
+        st.dataframe(dropped, hide_index=True, width="stretch")
+
+
+# ---------------------------------------------------------------------------
 # Map
 # ---------------------------------------------------------------------------
 
-age = data_age_hours(selected_source)
-if age is not None:
-    st.caption(f"Data last retrieved {age:.0f}h ago.")
+scraped = last_scraped(selected_source)
+if scraped is not None and selected_source not in STATIC_SOURCES:
+    st.caption(f"Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
 
 if capped:
     st.info(f"Showing top {max_arcs} routes. Adjust with the sidebar slider.")
 
 if filtered.is_empty():
     st.warning("No routes match the current filters.")
+    render_changes()  # dropped routes can still match, e.g. an airline that left
     st.stop()
 
 arc_data = filtered.select([
@@ -289,3 +359,5 @@ st.pydeck_chart(
 )
 
 st.caption(SOURCE_INFO.get(selected_source, ""))
+
+render_changes()

@@ -17,6 +17,11 @@ PARQUET_SOURCES = {
     "openflights_global": DATA_DIR / "routes_openflights_global.parquet",
 }
 
+# Scraped sources also keep an append-only archive: data/history/<source>/<YYYY-MM-DD>.parquet,
+# one file per UTC day (a same-day rescrape replaces it). OpenFlights is static, so no history.
+HISTORY_DIR = DATA_DIR / "history"
+HISTORY_SOURCES = {"aena", "ana"}
+
 
 def _conn() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(DB_PATH))
@@ -55,10 +60,14 @@ def _init_tables() -> None:
 
 
 def _hydrate_from_parquet() -> None:
-    """Load each committed parquet snapshot whose source is missing or older than its file.
+    """Load each committed parquet snapshot whose source is missing or out of date.
 
     Checked per source, not only on an empty table: Streamlit Cloud can keep pyfly.ddb
     across redeploys, so a newly added source or a CI-refreshed snapshot must still load.
+
+    Scraped snapshots carry their own scraped_at (written by write_routes), which is kept so
+    the app shows when the data was really scraped; they reload when it differs from the DB.
+    Static snapshots without it (OpenFlights) reload when the file is newer than the DB rows.
     """
     from datetime import datetime, timezone
 
@@ -67,19 +76,31 @@ def _hydrate_from_parquet() -> None:
         if not path.exists():
             continue
 
+        parquet = f"read_parquet('{path.as_posix()}')"
+        has_scraped_at = "scraped_at" in {
+            row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {parquet}").fetchall()
+        }
         loaded_at = con.execute(
             "SELECT MAX(scraped_at) FROM routes WHERE source = ?", [source]
         ).fetchone()[0]
-        file_time = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(tzinfo=None)
-        if loaded_at is not None and loaded_at >= file_time:
-            continue
+
+        if has_scraped_at:
+            file_scraped_at = con.execute(f"SELECT MAX(scraped_at) FROM {parquet}").fetchone()[0]
+            if loaded_at is not None and loaded_at == file_scraped_at:
+                continue
+            scraped_at_expr = ""
+        else:
+            file_time = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(tzinfo=None)
+            if loaded_at is not None and loaded_at >= file_time:
+                continue
+            scraped_at_expr = f", {_UTC_NOW} AS scraped_at"
 
         con.execute("DELETE FROM routes WHERE source = ?", [source])
         # Force source to the key so the DELETE above always matches what is inserted
         con.execute(f"""
-            INSERT INTO routes
-            SELECT * REPLACE (?::VARCHAR AS source), {_UTC_NOW} AS scraped_at
-            FROM read_parquet('{path.as_posix()}')
+            INSERT INTO routes BY NAME
+            SELECT * REPLACE (?::VARCHAR AS source){scraped_at_expr}
+            FROM {parquet}
         """, [source])
         loaded = con.execute(
             "SELECT COUNT(*) FROM routes WHERE source = ?", [source]
@@ -90,11 +111,18 @@ def _hydrate_from_parquet() -> None:
 
 
 def write_routes(df: pl.DataFrame, source: str) -> None:
+    from datetime import datetime, timezone
+
+    # One UTC timestamp for the whole scrape, stored in DuckDB and in the parquet snapshot
+    # so a cold start can show when the data was actually scraped.
+    scraped_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    df = df.with_columns(pl.lit(scraped_at).alias("scraped_at"))
+
     con = _conn()
     con.execute("DELETE FROM routes WHERE source = ?", [source])
     # Register the polars df as a DuckDB view so we can INSERT from it
     con.register("_incoming", df.to_arrow())
-    con.execute(f"INSERT INTO routes SELECT *, {_UTC_NOW} FROM _incoming")
+    con.execute("INSERT INTO routes BY NAME SELECT * FROM _incoming")
     con.unregister("_incoming")
     con.close()
 
@@ -103,6 +131,12 @@ def write_routes(df: pl.DataFrame, source: str) -> None:
     if parquet_path:
         df.write_parquet(parquet_path)
         print(f"  db: wrote {len(df)} rows to {parquet_path.name}")
+
+    if source in HISTORY_SOURCES:
+        archive = HISTORY_DIR / source / f"{scraped_at:%Y-%m-%d}.parquet"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(archive)
+        print(f"  db: archived snapshot to history/{source}/{archive.name}")
 
 
 def read_routes(source: str | None = None) -> pl.DataFrame:
@@ -117,8 +151,10 @@ def read_routes(source: str | None = None) -> pl.DataFrame:
     return result
 
 
-def get_data_age(source: str) -> float | None:
-    """Return age in hours of the most recent write for source, or None."""
+def get_last_scraped(source: str):
+    """Return the UTC datetime source was last scraped (or hydrated, for static data), or None."""
+    from datetime import timezone
+
     con = _conn()
     row = con.execute(
         "SELECT MAX(scraped_at) FROM routes WHERE source = ?", [source]
@@ -126,12 +162,20 @@ def get_data_age(source: str) -> float | None:
     con.close()
     if not row or row[0] is None:
         return None
-    from datetime import datetime, timezone
     ts = row[0]
     if hasattr(ts, "tzinfo") and ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return (now - ts).total_seconds() / 3600
+    return ts
+
+
+def get_data_age(source: str) -> float | None:
+    """Return age in hours of the most recent write for source, or None."""
+    from datetime import datetime, timezone
+
+    ts = get_last_scraped(source)
+    if ts is None:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 3600
 
 
 def check_cache(airport_icao: str) -> tuple[bool, pl.DataFrame | None]:
