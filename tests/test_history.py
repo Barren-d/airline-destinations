@@ -5,7 +5,7 @@ import polars as pl
 import pytest
 
 import pyfly.db as db
-from pyfly.history import list_snapshots, route_changes
+from pyfly.history import list_snapshots, new_routes_within, route_changes
 from pyfly.sources.base import SCHEMA
 
 
@@ -76,3 +76,26 @@ def test_route_changes_compares_latest_two(tmp_data):
     }
     assert changes.dropped["dest_iata"].to_list() == ["IBZ"]
     assert set(changes.added.columns) == set(SCHEMA)  # same columns as the map -> same filters
+
+
+def test_new_routes_within_ignores_seasonal_returns(tmp_data):
+    _write_snapshot(tmp_data, "2025-06-01", _routes([("LIS", "FAO", "TAP")]))    # outside 365 days
+    _write_snapshot(tmp_data, "2025-12-01", _routes([("LIS", "IBZ", "Ryanair")]))  # summer route seen last year
+    _write_snapshot(tmp_data, "2026-10-01", _routes([("LIS", "BCN", "TAP")]))
+    _write_snapshot(tmp_data, "2026-11-01", _routes([
+        ("LIS", "BCN", "TAP"),       # flown last month -> not new
+        ("LIS", "IBZ", "Ryanair"),   # back after a gap -> new vs previous, NOT new in 12 months
+        ("LIS", "FAO", "TAP"),       # last seen > 12 months ago -> new
+        ("LIS", "LPA", "Binter"),    # never seen -> new
+    ]))
+    year = new_routes_within("ana", days=365)
+    assert year.latest == date(2026, 11, 1)
+    assert year.compared == [date(2025, 12, 1), date(2026, 10, 1)]
+    assert set(year.routes["dest_iata"]) == {"FAO", "LPA"}
+    assert set(route_changes("ana").added["dest_iata"]) == {"IBZ", "FAO", "LPA"}
+
+
+def test_new_routes_within_needs_an_earlier_snapshot(tmp_data):
+    assert new_routes_within("ana") is None
+    _write_snapshot(tmp_data, "2026-11-01", _routes([("LIS", "BCN", "TAP")]))
+    assert new_routes_within("ana") is None

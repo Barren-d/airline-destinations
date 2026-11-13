@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pyfly.db import (
     HISTORY_SOURCES, get_last_scraped as _db_last_scraped, init_db, read_routes, snapshot_fingerprint,
 )
-from pyfly.history import RouteChanges, route_changes
+from pyfly.history import NewRoutes, RouteChanges, new_routes_within, route_changes
 from pyfly.sources.opensky import OpenSkySource
 
 st.set_page_config(
@@ -65,6 +65,24 @@ def last_scraped(source: str, fingerprint: tuple) -> datetime | None:
 @st.cache_data(ttl=300)
 def changes_since_previous(source: str, fingerprint: tuple) -> RouteChanges | None:
     return route_changes(source)
+
+
+@st.cache_data(ttl=300)
+def new_in_past_year(source: str, fingerprint: tuple) -> NewRoutes | None:
+    return new_routes_within(source, days=365)
+
+
+# Sidebar "Show" modes for sources with history, and the arc colours each one uses
+SHOW_ALL = "All"
+SHOW_NEW_PREV = "New since previous snapshot"
+SHOW_NEW_YEAR = "New in past 12 months"
+SHOW_DROPPED = "Dropped since previous snapshot"
+ARC_COLORS = {
+    SHOW_ALL: ([255, 140, 0, 160], [0, 128, 255, 160]),
+    SHOW_NEW_PREV: ([40, 200, 110, 190], [170, 240, 120, 190]),
+    SHOW_NEW_YEAR: ([40, 200, 110, 190], [170, 240, 120, 190]),
+    SHOW_DROPPED: ([230, 60, 60, 180], [255, 160, 120, 180]),
+}
 
 
 @st.cache_data
@@ -257,6 +275,33 @@ with st.sidebar:
     dest_country_name = st.selectbox("Dest country", ["All"] + list(dest_country_options))
     dest_country_filter = dest_country_options.get(dest_country_name, "All") if dest_country_name != "All" else "All"
 
+    # Route changes: swap the map's data for new or dropped routes; the filters above apply on top
+    show = SHOW_ALL
+    if selected_source in HISTORY_SOURCES:
+        changes = changes_since_previous(selected_source, SNAPSHOTS)
+        if changes is None:
+            st.caption("New/dropped route views need at least two snapshots of this source.")
+        else:
+            show = st.selectbox("Show", [SHOW_ALL, SHOW_NEW_PREV, SHOW_NEW_YEAR, SHOW_DROPPED],
+                                key=f"show_{selected_source}")
+            fmt = "%B %Y" if selected_source in MONTHLY_SOURCES else "%d %b %Y"
+            if show == SHOW_NEW_PREV:
+                df = changes.added
+                st.caption(f"Routes in {changes.latest:{fmt}} not flown in {changes.previous:{fmt}}.")
+            elif show == SHOW_DROPPED:
+                df = changes.dropped
+                st.caption(f"Routes in {changes.previous:{fmt}} gone by {changes.latest:{fmt}}.")
+            elif show == SHOW_NEW_YEAR:
+                year = new_in_past_year(selected_source, SNAPSHOTS)
+                df = year.routes
+                span = (f"{year.compared[0]:{fmt}} – {year.compared[-1]:{fmt}}" if len(year.compared) > 1
+                        else f"{year.compared[0]:{fmt}}")
+                st.caption(
+                    f"Routes in {year.latest:{fmt}} not seen in any of {len(year.compared)} earlier "
+                    f"snapshot{'s' if len(year.compared) > 1 else ''} ({span})."
+                    + (" Little history yet — this matches 'new since previous'." if len(year.compared) < 3 else "")
+                )
+
     st.markdown("---")
     st.subheader("Arc density")
     max_arcs = st.slider("Max routes", min_value=100, max_value=2000, value=500, step=100)
@@ -368,6 +413,8 @@ if scraped is not None and selected_source in MONTHLY_SOURCES:
     st.caption(f"Routes flown in {scraped:%B %Y} (the latest month published).")
 elif scraped is not None and selected_source not in STATIC_SOURCES:
     st.caption(f"Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
+if show != SHOW_ALL:
+    st.info(f"Showing **{show.lower()}** only — switch back under **Show** in the sidebar.")
 
 if capped:
     st.info(f"Showing top {max_arcs} routes. Adjust with the sidebar slider.")
@@ -398,8 +445,8 @@ arc_layer = pdk.Layer(
     data=arc_data,
     get_source_position=["origin_lon", "origin_lat"],
     get_target_position=["dest_lon", "dest_lat"],
-    get_source_color=[255, 140, 0, 160],
-    get_target_color=[0, 128, 255, 160],
+    get_source_color=ARC_COLORS[show][0],  # green for new routes, red for dropped
+    get_target_color=ARC_COLORS[show][1],
     get_width=1.5,
     pickable=True,
     auto_highlight=True,
