@@ -36,6 +36,7 @@ SOURCE_INFO = {
     "avinor_feed": "Avinor's open flight data feed — every route flown from Avinor's 43 airports in a 14-day window, with airlines.",
     "swedavia": "Scraped from swedavia.com destination lists — scheduled and charter routes with airlines for Swedavia's 10 airports.",
     "isavia": "Scraped from innanlandsflugvellir.is — Iceland's domestic network (and Akureyri–Greenland) as listed by Isavia's domestic airports. Excludes Keflavík.",
+    "kef": "Scraped from kefairport.com — Keflavík's international destinations with airlines (all-year and seasonal) as published by the airport.",
     "anac": "Brazil ANAC Voo Regular Ativo (VRA) — every scheduled passenger route flown at least weekly to, from or within Brazil in the month, Brazilian and foreign airlines. Cargo excluded. Published with a ~1–2 month lag.",
     "bts": "US DOT BTS T-100 Segment — every scheduled passenger route flown at least weekly to, from or within the US in the month, by operating carrier (regional partners such as SkyWest appear by name). Published with a ~3-month lag.",
     "openflights_global": "All countries — OpenFlights database circa 2017. Filter by origin country to explore.",
@@ -119,6 +120,8 @@ DEFAULT_VIEWS = {
     "swedavia": {"latitude": 61.0, "longitude": 16.0, "zoom": 3.9},
     # Iceland, with room to the west for Akureyri–Nerlerit Inaat (Greenland)
     "isavia": {"latitude": 66.6, "longitude": -20.0, "zoom": 4.5},
+    # Keflavík's transatlantic network: North America to Europe
+    "kef": {"latitude": 52.0, "longitude": -35.0, "zoom": 2.3},
     # Contiguous US; Alaska, Hawaii and the territories are an airport filter away
     "bts": {"latitude": 37.5, "longitude": -96.0, "zoom": 3.4},
     "anac": {"latitude": -14.0, "longitude": -50.0, "zoom": 3.4},
@@ -199,24 +202,37 @@ with st.sidebar:
         "Avinor Feed (Norway)": "avinor_feed",
         "Swedavia Live (Sweden)": "swedavia",
         "Isavia Domestic (Iceland)": "isavia",
+        "Keflavík Airport (Iceland)": "kef",
         "BTS T-100 (USA)": "bts",
         "ANAC VRA (Brazil)": "anac",
         "Historical — Global (2017)": "openflights_global",
         f"OpenSky {'✓' if sky_ok else '(no credentials)'}": "opensky",
     }
-    source_choice = st.radio("Source", list(source_options.keys()), label_visibility="collapsed")
-    selected_source = source_options[source_choice]
+    source_labels = {v: k for k, v in source_options.items()}
+    # A list of checkboxes keeps the look of the old single-choice radio list
+    selected_sources = [
+        src for label, src in source_options.items()
+        if st.checkbox(label, value=(src == "aena"), key=f"source_{src}")
+    ]
+    if not selected_sources:
+        st.info("Choose at least one source.")
+        st.stop()
 
-    if selected_source == "opensky" and not sky_ok:
+    if "opensky" in selected_sources and not sky_ok:
         st.warning("Set OPENSKY_USERNAME and OPENSKY_PASSWORD in .env to enable OpenSky.")
 
-    st.caption(f"Data: {_age_label(selected_source)}")
+    for src in selected_sources:
+        prefix = f"{source_labels[src]}: " if len(selected_sources) > 1 else ""
+        st.caption(f"Data: {prefix}{_age_label(src)}")
 
     st.markdown("---")
 
-    df = load_data(selected_source, SNAPSHOTS)
+    frames = {src: load_data(src, SNAPSHOTS) for src in selected_sources}
+    empty_sources = [src for src, frame in frames.items() if frame.is_empty()]
+    loaded = [frame for frame in frames.values() if not frame.is_empty()]
+    df = pl.concat(loaded, how="vertical_relaxed") if loaded else pl.DataFrame()
 
-    if df.is_empty():
+    if empty_sources:
         cli_map = {
             "aena": "uv run python -m pyfly --source aena --scope aena",
             "ana": "uv run python -m pyfly --source ana --scope portugal",
@@ -224,14 +240,18 @@ with st.sidebar:
             "avinor_feed": "uv run python -m pyfly --source avinor_feed --scope norway",
             "swedavia": "uv run python -m pyfly --source swedavia --scope sweden",
             "isavia": "uv run python -m pyfly --source isavia --scope iceland",
+            "kef": "uv run python -m pyfly --source kef --scope iceland",
             "bts": "uv run python -m pyfly --source bts --scope usa --backfill 12",
             "anac": "uv run python -m pyfly --source anac --scope brazil --backfill 12",
             "openflights_global": "uv run python -m pyfly --source openflights --scope global_all",
             "opensky": "uv run python -m pyfly --source opensky --scope aena",
         }
-        st.warning("No data for this source. Run:")
-        st.code(cli_map.get(selected_source, f"uv run python -m pyfly --source {selected_source}"))
-        st.stop()
+        for src in empty_sources:
+            st.warning(f"No data for {source_labels[src]}. Run:")
+            st.code(cli_map.get(src, f"uv run python -m pyfly --source {src}"))
+        selected_sources = [src for src in selected_sources if src not in empty_sources]
+        if not selected_sources:
+            st.stop()
 
     st.subheader("Filters")
 
@@ -245,7 +265,8 @@ with st.sidebar:
     })
     origin_country_options = {iso_to_country_name(c): c for c in origin_iso_codes}
 
-    if selected_source == "openflights_global":
+    # The 2017 global set is too big to draw unfiltered, so it always has an origin country
+    if "openflights_global" in selected_sources:
         default_name = iso_to_country_name("ES")
         default_idx = list(origin_country_options).index(default_name) if default_name in origin_country_options else 0
         origin_country_name = st.selectbox("Origin country", list(origin_country_options), index=default_idx)
@@ -275,32 +296,52 @@ with st.sidebar:
     dest_country_name = st.selectbox("Dest country", ["All"] + list(dest_country_options))
     dest_country_filter = dest_country_options.get(dest_country_name, "All") if dest_country_name != "All" else "All"
 
-    # Route changes: swap the map's data for new or dropped routes; the filters above apply on top
+    # Each source lists departures from its own airports (AENA: Spain → Portugal, ANA: Portugal →
+    # Spain), so origin/destination filters can match the reverse direction too.
+    both_directions = st.checkbox(
+        "Match both directions",
+        help="Also include routes from the destination side to the origin side — e.g. with AENA and "
+             "ANA selected, Spain → Portugal (AENA) and Portugal → Spain (ANA).",
+    )
+
+    # Route changes: swap the map's data for new or dropped routes; the filters above apply on top.
+    # Each source is compared with its own history; sources without two snapshots are left out.
     show = SHOW_ALL
-    if selected_source in HISTORY_SOURCES:
-        changes = changes_since_previous(selected_source, SNAPSHOTS)
-        if changes is None:
-            st.caption("New/dropped route views need at least two snapshots of this source.")
-        else:
-            show = st.selectbox("Show", [SHOW_ALL, SHOW_NEW_PREV, SHOW_NEW_YEAR, SHOW_DROPPED],
-                                key=f"show_{selected_source}")
-            fmt = "%B %Y" if selected_source in MONTHLY_SOURCES else "%d %b %Y"
-            if show == SHOW_NEW_PREV:
-                df = changes.added
-                st.caption(f"Routes in {changes.latest:{fmt}} not flown in {changes.previous:{fmt}}.")
-            elif show == SHOW_DROPPED:
-                df = changes.dropped
-                st.caption(f"Routes in {changes.previous:{fmt}} gone by {changes.latest:{fmt}}.")
-            elif show == SHOW_NEW_YEAR:
-                year = new_in_past_year(selected_source, SNAPSHOTS)
-                df = year.routes
-                span = (f"{year.compared[0]:{fmt}} – {year.compared[-1]:{fmt}}" if len(year.compared) > 1
-                        else f"{year.compared[0]:{fmt}}")
-                st.caption(
-                    f"Routes in {year.latest:{fmt}} not seen in any of {len(year.compared)} earlier "
-                    f"snapshot{'s' if len(year.compared) > 1 else ''} ({span})."
-                    + (" Little history yet — this matches 'new since previous'." if len(year.compared) < 3 else "")
-                )
+    with_history = {src: changes_since_previous(src, SNAPSHOTS)
+                    for src in selected_sources if src in HISTORY_SOURCES}
+    with_history = {src: ch for src, ch in with_history.items() if ch is not None}
+    if not with_history:
+        st.caption("New/dropped route views need at least two snapshots of a selected source.")
+    else:
+        show = st.selectbox("Show", [SHOW_ALL, SHOW_NEW_PREV, SHOW_NEW_YEAR, SHOW_DROPPED], key="show")
+        if show != SHOW_ALL:
+            parts, notes = [], []
+            for src, changes in with_history.items():
+                fmt = "%B %Y" if src in MONTHLY_SOURCES else "%d %b %Y"
+                name = f"{source_labels[src]}: " if len(selected_sources) > 1 else ""
+                if show == SHOW_NEW_PREV:
+                    parts.append(changes.added)
+                    notes.append(f"{name}routes in {changes.latest:{fmt}} not flown in {changes.previous:{fmt}}.")
+                elif show == SHOW_DROPPED:
+                    parts.append(changes.dropped)
+                    notes.append(f"{name}routes in {changes.previous:{fmt}} gone by {changes.latest:{fmt}}.")
+                else:
+                    year = new_in_past_year(src, SNAPSHOTS)
+                    parts.append(year.routes)
+                    span = (f"{year.compared[0]:{fmt}} – {year.compared[-1]:{fmt}}" if len(year.compared) > 1
+                            else f"{year.compared[0]:{fmt}}")
+                    notes.append(
+                        f"{name}routes in {year.latest:{fmt}} not seen in any of {len(year.compared)} earlier "
+                        f"snapshot{'s' if len(year.compared) > 1 else ''} ({span})."
+                        + (" Little history yet." if len(year.compared) < 3 else "")
+                    )
+            df = pl.concat(parts, how="vertical_relaxed")
+            # only sources that keep history can be "not enough yet" (OpenFlights is static)
+            skipped = [source_labels[s] for s in selected_sources
+                       if s in HISTORY_SOURCES and s not in with_history]
+            if skipped:
+                notes.append(f"Not enough history yet: {', '.join(skipped)}.")
+            st.caption("  \n".join(notes))
 
     st.markdown("---")
     st.subheader("Arc density")
@@ -314,41 +355,61 @@ with st.sidebar:
 # Filtering
 # ---------------------------------------------------------------------------
 
-def apply_filters(frame: pl.DataFrame) -> pl.DataFrame:
-    """Apply the sidebar filters — shared by the map and the changes-since-last-scrape view."""
+def _ends_match(from_col: str, to_col: str) -> pl.Expr:
+    """True where from_col satisfies the origin filters and to_col the destination filter."""
+    expr = pl.lit(True)
     if origin_country_filter != "All" and cmap:
         in_origin_country = {k for k, v in cmap.items() if v == origin_country_filter}
-        frame = frame.filter(pl.col("origin_iata").is_in(in_origin_country))
-
+        expr &= pl.col(from_col).is_in(in_origin_country)
     if origin_filter != "All":
-        frame = frame.filter(pl.col("origin_iata") == origin_filter)
+        expr &= pl.col(from_col) == origin_filter
+    if dest_country_filter != "All" and cmap:
+        in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
+        expr &= pl.col(to_col).is_in(in_dest_country)
+    return expr
+
+
+def apply_filters(frame: pl.DataFrame) -> pl.DataFrame:
+    """Apply the sidebar filters — shared by the map and the changes-since-last-scrape view."""
+    ends = _ends_match("origin_iata", "dest_iata")
+    if both_directions:
+        ends |= _ends_match("dest_iata", "origin_iata")
+    frame = frame.filter(ends)
 
     if airline_filter != "All":
         frame = frame.filter(pl.col("airline_name") == airline_filter)
 
-    if dest_country_filter != "All" and cmap:
-        in_dest_country = {k for k, v in cmap.items() if v == dest_country_filter}
-        frame = frame.filter(pl.col("dest_iata").is_in(in_dest_country))
-
     return frame
 
 
+def route_count(frame: pl.DataFrame) -> int:
+    """Routes are origin→destination airport pairs: one pair reported by several sources (AENA and
+    BTS both list Madrid→JFK) or flown by several airlines counts once."""
+    return frame.select(["origin_iata", "dest_iata"]).unique().height
+
+
 filtered = apply_filters(df)
+matching = filtered  # everything the filters match, before the arc cap
 # Fit the map to every matching origin, not just those that survive the arc cap below
 # (the cap keeps the first rows, e.g. only LIS/OPO/FAO for ANA, dropping Madeira and the Azores)
 view_origins = filtered.select(["origin_lat", "origin_lon"]).drop_nulls()
 
 capped = False
 if origin_filter == "All" and origin_country_filter == "All" and len(filtered) > max_arcs:
-    filtered = filtered.head(max_arcs)
+    if len(selected_sources) > 1:
+        # share the cap between sources, otherwise the first source would take every arc
+        filtered = filtered.group_by("source", maintain_order=True).head(max_arcs // len(selected_sources))
+    else:
+        filtered = filtered.head(max_arcs)
     capped = True
 
 with stats_slot:
+    # Stats cover every matching route, not just the arcs drawn under the cap
     st.markdown(
-        f"**Routes:** {len(filtered)}  \n"
-        f"**Destinations:** {filtered['dest_iata'].n_unique()}  \n"
+        f"**Routes:** {route_count(matching)}  \n"
+        f"**Destinations:** {matching['dest_iata'].n_unique()}  \n"
         # Scraped sources (AENA, ANA) only have airline_name; airline_iata is null.
-        f"**Airlines:** {filtered['airline_name'].drop_nulls().n_unique()}"
+        f"**Airlines:** {matching['airline_name'].drop_nulls().n_unique()}"
     )
 
 
@@ -357,47 +418,60 @@ with stats_slot:
 # ---------------------------------------------------------------------------
 
 def _route_summary(frame: pl.DataFrame) -> pl.DataFrame:
-    """One row per origin→destination with readable airport names and its airlines."""
+    """One row per source and origin→destination with readable airport names and its airlines."""
     def name(iata: str) -> str:
         return f"{alookup[iata]['name']} ({iata})" if iata in alookup else iata
 
     def country(iata: str) -> str:
         return iso_to_country_name(cmap[iata]) if iata in cmap else ""
 
+    columns = (["Source"] if len(selected_sources) > 1 else []) + ["From", "To", "Country", "Airlines"]
     return (
-        frame.group_by(["origin_iata", "dest_iata"])
+        frame.group_by(["source", "origin_iata", "dest_iata"])
         .agg(pl.col("airline_name").drop_nulls().unique().sort().str.join(", ").alias("Airlines"))
-        .sort(["origin_iata", "dest_iata"])
+        .sort(["source", "origin_iata", "dest_iata"])
         .with_columns(
+            pl.col("source").replace_strict(source_labels, default=pl.col("source")).alias("Source"),
             pl.col("origin_iata").map_elements(name, return_dtype=pl.Utf8).alias("From"),
             pl.col("dest_iata").map_elements(name, return_dtype=pl.Utf8).alias("To"),
             pl.col("dest_iata").map_elements(country, return_dtype=pl.Utf8).alias("Country"),
         )
-        .select(["From", "To", "Country", "Airlines"])
+        .select(columns)
     )
 
 
 def render_changes() -> None:
-    if selected_source not in HISTORY_SOURCES:
+    sources = [src for src in selected_sources if src in HISTORY_SOURCES]
+    if not sources:
         return
     st.markdown("---")
     st.subheader("Changes since previous scrape")
-    changes = changes_since_previous(selected_source, SNAPSHOTS)
-    if changes is None:
+    all_changes = {src: changes_since_previous(src, SNAPSHOTS) for src in sources}
+    available = {src: ch for src, ch in all_changes.items() if ch is not None}
+    if not available:
         st.caption("History starts with the latest scrape — changes will appear after the next one.")
         return
 
-    added = _route_summary(apply_filters(changes.added))
-    dropped = _route_summary(apply_filters(changes.dropped))
-    fmt = "%B %Y" if selected_source in MONTHLY_SOURCES else "%d %b %Y"
+    added_rows = apply_filters(pl.concat([ch.added for ch in available.values()], how="vertical_relaxed"))
+    dropped_rows = apply_filters(pl.concat([ch.dropped for ch in available.values()], how="vertical_relaxed"))
+    added, dropped = _route_summary(added_rows), _route_summary(dropped_rows)
+    periods = []
+    for src, ch in available.items():
+        fmt = "%B %Y" if src in MONTHLY_SOURCES else "%d %b %Y"
+        name = f"{source_labels[src]}: " if len(selected_sources) > 1 else ""
+        periods.append(f"{name}{ch.previous:{fmt}} → {ch.latest:{fmt}}")
+    missing = [source_labels[s] for s, ch in all_changes.items() if ch is None]
     st.caption(
-        f"{changes.previous:{fmt}} → {changes.latest:{fmt}}, for the current filters. "
+        "; ".join(periods) + ", for the current filters. "
         "A route counts as new or dropped when no airline flew it in the other scrape."
+        + (f" No history yet: {', '.join(missing)}." if missing else "")
     )
     c1, c2 = st.columns(2)
-    c1.metric("New routes", len(added))
-    c2.metric("Dropped routes", len(dropped))
-    tab_added, tab_dropped = st.tabs([f"New ({len(added)})", f"Dropped ({len(dropped)})"])
+    # Metrics count airport pairs; the tables keep one row per source so you can see who reports it
+    n_added, n_dropped = route_count(added_rows), route_count(dropped_rows)
+    c1.metric("New routes", n_added)
+    c2.metric("Dropped routes", n_dropped)
+    tab_added, tab_dropped = st.tabs([f"New ({n_added})", f"Dropped ({n_dropped})"])
     with tab_added:
         st.dataframe(added, hide_index=True, width="stretch")
     with tab_dropped:
@@ -408,16 +482,20 @@ def render_changes() -> None:
 # Map
 # ---------------------------------------------------------------------------
 
-scraped = last_scraped(selected_source, SNAPSHOTS)
-if scraped is not None and selected_source in MONTHLY_SOURCES:
-    st.caption(f"Routes flown in {scraped:%B %Y} (the latest month published).")
-elif scraped is not None and selected_source not in STATIC_SOURCES:
-    st.caption(f"Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
+for src in selected_sources:
+    scraped = last_scraped(src, SNAPSHOTS)
+    name = f"{source_labels[src]}: " if len(selected_sources) > 1 else ""
+    if scraped is not None and src in MONTHLY_SOURCES:
+        st.caption(f"{name}Routes flown in {scraped:%B %Y} (the latest month published).")
+    elif scraped is not None and src not in STATIC_SOURCES:
+        st.caption(f"{name}Routes last scraped on {scraped:%d %b %Y at %H:%M} UTC.")
 if show != SHOW_ALL:
     st.info(f"Showing **{show.lower()}** only — switch back under **Show** in the sidebar.")
 
 if capped:
-    st.info(f"Showing top {max_arcs} routes. Adjust with the sidebar slider.")
+    per_source = f", up to {max_arcs // len(selected_sources)} per source" if len(selected_sources) > 1 else ""
+    st.info(f"Drawing {len(filtered)} of {len(matching)} route arcs{per_source}. "
+            "Adjust with the Max routes slider, or pick an airport or country.")
 
 if filtered.is_empty():
     st.warning("No routes match the current filters.")
@@ -461,8 +539,9 @@ tooltip = {
     "style": {"backgroundColor": "#1a1a2e", "color": "white", "fontSize": "13px"},
 }
 
-if origin_filter == "All" and origin_country_filter == "All" and selected_source in DEFAULT_VIEWS:
-    view_state = pdk.ViewState(**DEFAULT_VIEWS[selected_source], pitch=25)
+single = selected_sources[0] if len(selected_sources) == 1 else None
+if origin_filter == "All" and origin_country_filter == "All" and single in DEFAULT_VIEWS:
+    view_state = pdk.ViewState(**DEFAULT_VIEWS[single], pitch=25)
 else:
     view_state = _view_for_airports(view_origins["origin_lat"].to_list(), view_origins["origin_lon"].to_list())
 
@@ -477,6 +556,7 @@ st.pydeck_chart(
     width="stretch",
 )
 
-st.caption(SOURCE_INFO.get(selected_source, ""))
+for src in selected_sources:
+    st.caption(SOURCE_INFO.get(src, ""))
 
 render_changes()
