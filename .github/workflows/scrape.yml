@@ -46,6 +46,10 @@ jobs:
         continue-on-error: true
         run: uv run python -m pyfly --source isavia --scope iceland
 
+      - name: Run Keflavík Airport (Iceland) scraper
+        continue-on-error: true
+        run: uv run python -m pyfly --source kef --scope iceland
+
       # Latest published month; rerunning before BTS publishes a new month just rewrites it
       - name: Download BTS T-100 (USA)
         continue-on-error: true
@@ -59,6 +63,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/routes_aena.parquet data/routes_ana.parquet data/routes_avinor.parquet data/routes_avinor_feed.parquet data/routes_swedavia.parquet data/routes_isavia.parquet data/routes_bts.parquet data/routes_anac.parquet data/history
+          git add data/routes_aena.parquet data/routes_ana.parquet data/routes_avinor.parquet data/routes_avinor_feed.parquet data/routes_swedavia.parquet data/routes_isavia.parquet data/routes_kef.parquet data/routes_bts.parquet data/routes_anac.parquet data/history
           git diff --staged --quiet || git commit -m "data: route snapshots $(date -u +%Y-%m-%d)"
           git push

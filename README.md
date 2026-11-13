@@ -41,6 +41,7 @@ the slider (default 500 — raise it or pick a single airport to see everything)
 | **Avinor Feed** | Every route flown from all 43 Avinor airports in the next 14 days, with airlines, from Avinor's open flight data feed | Manual scrape (CLI or GitHub Actions) | None |
 | **Swedavia Live** | Scheduled + charter destinations with airlines for Swedavia's 10 airports, from swedavia.com's destination lists | Manual scrape (CLI or GitHub Actions) | None |
 | **Isavia Domestic** | Iceland's domestic network (plus Akureyri–Greenland) with airlines, from innanlandsflugvellir.is; excludes Keflavík | Manual scrape (CLI or GitHub Actions) | None |
+| **Keflavík Airport** | Keflavík's international destinations with airlines (all-year and seasonal), from kefairport.com | Manual scrape (CLI or GitHub Actions) | None |
 | **ANAC VRA (Brazil)** | Every scheduled passenger route flown ≥4×/month to, from or within Brazil (Brazilian and foreign airlines), from ANAC's Voo Regular Ativo open data | Monthly data, ~1–2-month lag; manual download | None |
 | **BTS T-100 (USA)** | Every scheduled passenger route flown ≥4×/month to, from or within the US, by operating carrier, from the US DOT's T-100 Segment table | Monthly data, ~3-month lag; manual download | None |
 | **Historical (2017)** | OpenFlights open dataset, pre-COVID baseline | Static | None |
@@ -92,6 +93,7 @@ PyFly/
 │   │   ├── avinor_feed.py      ← Avinor open XML flight data feed, Norway (CLI only)
 │   │   ├── swedavia.py         ← swedavia.com destination lists, Sweden (CLI only)
 │   │   ├── isavia.py           ← innanlandsflugvellir.is destination cards, Iceland (CLI only)
+│   │   ├── kef.py              ← kefairport.com destinations (page JSON), Keflavík (CLI only)
 │   │   ├── bts.py              ← US DOT BTS T-100 Segment, monthly (CLI only)
 │   │   ├── anac.py             ← Brazil ANAC Voo Regular Ativo, monthly (CLI only)
 │   │   ├── openflights.py      ← Historical 2017 source
@@ -119,6 +121,7 @@ PyFly/
 │   ├── test_avinor.py
 │   ├── test_swedavia.py
 │   ├── test_isavia.py
+│   ├── test_kef.py
 │   ├── test_bts.py
 │   ├── test_anac.py
 │   ├── test_history.py
@@ -152,6 +155,9 @@ uv run python -m pyfly --source swedavia --scope sweden
 
 # Isavia Domestic (Iceland) — 12 domestic airports, plain HTTP (Keflavík not included)
 uv run python -m pyfly --source isavia --scope iceland
+
+# Keflavík Airport (KEF) — one request; unknown destination names are logged and skipped
+uv run python -m pyfly --source kef --scope iceland
 
 # BTS T-100 (USA) — latest published month; --backfill N also archives the N-1 months before it
 uv run python -m pyfly --source bts --scope usa
@@ -240,7 +246,7 @@ Nothing else changes.
 
 ---
 
-*Data sources: [aena.es](https://www.aena.es) · [ANA Aeroportos de Portugal](https://www.ana.pt) · [Avinor](https://www.avinor.no) · [Swedavia](https://www.swedavia.com) · [Isavia](https://www.innanlandsflugvellir.is/en) · [BTS TranStats](https://www.transtats.bts.gov) · [ANAC](https://sistemas.anac.gov.br/dadosabertos/) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
+*Data sources: [aena.es](https://www.aena.es) · [ANA Aeroportos de Portugal](https://www.ana.pt) · [Avinor](https://www.avinor.no) · [Swedavia](https://www.swedavia.com) · [Isavia](https://www.innanlandsflugvellir.is/en) · [Keflavík Airport](https://www.kefairport.com) · [BTS TranStats](https://www.transtats.bts.gov) · [ANAC](https://sistemas.anac.gov.br/dadosabertos/) · [OpenFlights](https://openflights.org/data.html) · [OpenSky Network](https://opensky-network.org) · [OurAirports](https://ourairports.com/data/)*
 
 ---
 
@@ -259,6 +265,7 @@ Nothing else changes.
 | [Avinor](https://www.avinor.no) direct-routes pages | Scraped from public pages | Same as AENA — only route pairs are stored |
 | [Swedavia](https://www.swedavia.com) destination lists | Scraped from public pages | Same as AENA — only route pairs and airline names are stored |
 | [Isavia Domestic Airports](https://www.innanlandsflugvellir.is/en) destination pages | Scraped from public pages | Same as AENA — only route pairs and airline names are stored |
+| [Keflavík Airport](https://www.kefairport.com/destinations) destinations | Scraped from public pages | Same as AENA — only route pairs and airline names are stored |
 | [BTS T-100 Segment](https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FMG) (US DOT) | US government work, public domain | Downloaded from TranStats; only route pairs and carriers are stored |
 | [ANAC Voo Regular Ativo](https://sistemas.anac.gov.br/dadosabertos/) (Brazil) | Brazilian government open data | Monthly CSVs from ANAC's open data directory; only route pairs and airlines are stored |
 | [Avinor flight data](https://partner.avinor.no/en/services/flight-data/) XML feed | Offered by Avinor for reuse in other services | Fetched on manual scrapes only and cached as snapshots, as Avinor asks; only route pairs and airline names are stored |

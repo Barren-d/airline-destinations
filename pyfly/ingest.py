@@ -8,6 +8,7 @@ from .sources.swedavia import SwedaviaSource
 from .sources.isavia import IsaviaSource
 from .sources.bts import BTSSource
 from .sources.anac import ANACSource
+from .sources.kef import KEFSource
 from .sources.openflights import OpenFlightsSource
 from .sources.opensky import OpenSkySource
 from .db import init_db, write_routes
@@ -21,6 +22,7 @@ SOURCES = {
     "isavia": IsaviaSource,
     "bts": BTSSource,
     "anac": ANACSource,
+    "kef": KEFSource,
     "openflights": OpenFlightsSource,
     "opensky": OpenSkySource,
 }
